@@ -394,57 +394,94 @@ with col_main:
     universe_name = st.selectbox("Select Universe", list(STOCK_UNIVERSE.keys()))
     stocks = STOCK_UNIVERSE[universe_name]
 
-    # ── SCANNER (UPGRADED — 5 factors, colour signals) ────────
+    # ── SCANNER ───────────────────────────────────────────────
     st.markdown(f"#### 🔍 Scanner — {universe_name} ({len(stocks)} stocks)")
-    col_scan1, col_scan2 = st.columns([2,3])
-    scan_btn = col_scan1.button(f"🔍 Scan All {len(stocks)} Stocks", type="primary")
-    col_scan2.caption("Click to scan all stocks with AI signals, RSI, MACD and Volume")
+    scan_btn = st.button(f"🔍 Scan All {len(stocks)} Stocks", type="primary", use_container_width=False)
 
-    # Auto-run on first load or when universe changes
-    universe_key = f"last_universe_{universe_name}"
-    if universe_key not in st.session_state:
-        st.session_state[universe_key] = False
-    auto_scan = not st.session_state[universe_key]
-
-    if scan_btn or auto_scan:
+    # Auto-run on first load or universe change
+    universe_key = f"scanned_{universe_name}_{selected_mode}"
+    if scan_btn or universe_key not in st.session_state:
         st.session_state[universe_key] = True
-        with st.spinner(f"Scanning {len(stocks)} stocks for {selected_mode} signals..."):
+        st.session_state.scan_results = []
+        # Use fallback period for scanner too
+        scan_period   = mcfg["period"] if mcfg["period"] != "1d" else "5d"
+        scan_interval = mcfg["interval"] if mcfg["period"] != "1d" else "15m"
+
+        with st.spinner(f"⏳ Scanning {len(stocks)} stocks..."):
             scan = []
             for s in stocks:
                 try:
-                    d = yf.Ticker(s).history(period=mcfg["period"], interval=mcfg["interval"])
+                    d = yf.Ticker(s).history(period=scan_period, interval=scan_interval)
                     if d is None or d.empty or len(d) < 20: continue
                     d = compute_indicators(d)
                     last = d.iloc[-1]
                     sc = 0
                     if last["Close"] > last["EMA20"] > last["EMA50"]: sc += 2
-                    if 45 < last["RSI"] < 75: sc += 1
-                    if last["MACD"] > last["MACD_Signal"]: sc += 1
-                    if last["Vol_Ratio"] > 1.2: sc += 1
+                    if 45 < last["RSI"] < 68:                         sc += 1  # strict RSI range
+                    if last["MACD"] > last["MACD_Signal"]:             sc += 1
+                    if last["Vol_Ratio"] > 1.2:                        sc += 1
+                    if last["RSI"] > 78:                               sc -= 2  # overbought penalty
+                    if last["RSI"] < 25:                               sc -= 1  # extreme oversold penalty
+                    sc = max(0, min(sc, 5))
                     chg = (last["Close"] - d["Close"].iloc[-2]) / d["Close"].iloc[-2] * 100
                     scan.append({
-                        "Stock":   s.replace(".NS",""),
-                        "Price":   round(float(last["Close"]), 2),
-                        "Chg %":   round(chg, 2),
-                        "RSI":     round(float(last["RSI"]), 1),
-                        "MACD":    round(float(last["MACD"]), 2),
-                        "Vol":     round(float(last["Vol_Ratio"]), 2),
-                        "Score":   f"{sc}/5",
-                        "Signal":  "🟢 BUY" if sc >= 3 else ("🔴 SELL" if sc <= 1 else "🟡 HOLD"),
-                        "_score":  sc,
-                        "_sym":    s,
+                        "Stock":  s.replace(".NS",""),
+                        "Price":  round(float(last["Close"]),2),
+                        "Chg%":   round(chg,2),
+                        "RSI":    round(float(last["RSI"]),1),
+                        "MACD":   round(float(last["MACD"]),2),
+                        "Vol":    round(float(last["Vol_Ratio"]),2),
+                        "Score":  sc,
+                        "Signal": "🟢 BUY" if sc>=3 else("🔴 SELL" if sc<=1 else "🟡 HOLD"),
+                        "_score": sc,
+                        "_sym":   s,
                     })
                 except: pass
             st.session_state.scan_results = sorted(scan, key=lambda x: -x["_score"])
 
     if st.session_state.scan_results:
-        df_sc = pd.DataFrame(st.session_state.scan_results)
-        display_df = df_sc[["Stock","Price","Chg %","RSI","MACD","Vol","Score","Signal"]].copy()
-        st.dataframe(display_df, hide_index=True, use_container_width=True, height=270)
-        best_sym  = df_sc.iloc[0]["_sym"]
-        best_idx  = stocks.index(best_sym) if best_sym in stocks else 0
+        results = st.session_state.scan_results
+
+        # ── TOP 5 HIGHLIGHTED CARDS ───────────────────────────
+        buy_picks = [r for r in results if r["Signal"]=="🟢 BUY"][:5]
+        if buy_picks:
+            st.markdown("##### 🏆 Top 5 BUY Picks")
+            card_cols = st.columns(min(len(buy_picks), 5))
+            for i, r in enumerate(buy_picks):
+                chg = r["Chg%"]
+                chg_color = "#27ae60" if chg >= 0 else "#e74c3c"
+                chg_arrow = "▲" if chg >= 0 else "▼"
+                rsi_label = "🔴 OB" if r["RSI"]>70 else("🟢 OS" if r["RSI"]<30 else "🟢 OK")
+                rank_icons = ["🥇","🥈","🥉","4️⃣","5️⃣"]
+                card_cols[i].markdown(f"""
+<div style="background:linear-gradient(135deg,#003d2a,#001a12);
+border:2px solid #00b880;border-radius:10px;padding:12px 10px;
+text-align:center;min-height:180px;">
+<div style="font-size:18px;margin-bottom:2px;">{rank_icons[i]}</div>
+<div style="font-size:15px;font-weight:700;color:#00e5a0;">{r["Stock"]}</div>
+<div style="font-size:18px;font-weight:700;color:#fff;margin:4px 0;">₹{r["Price"]:,.1f}</div>
+<div style="font-size:12px;color:{chg_color};font-weight:600;">{chg_arrow} {abs(chg):.2f}%</div>
+<div style="margin:6px 0;background:#00b880;border-radius:99px;padding:2px 8px;
+font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
+<div style="font-size:11px;color:#aaa;margin-top:4px;">Score {r["Score"]}/5</div>
+<div style="font-size:11px;color:#aaa;">RSI {r["RSI"]} {rsi_label}</div>
+<div style="font-size:11px;color:#aaa;">Vol {r["Vol"]:.1f}x</div>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.warning("🟡 No strong BUY signals right now — market may be consolidating")
+
+        # ── FULL TABLE ────────────────────────────────────────
+        st.markdown("##### 📋 All Stocks")
+        df_sc = pd.DataFrame(results)
+        disp = df_sc[["Stock","Price","Chg%","RSI","MACD","Vol","Score","Signal"]].copy()
+        disp["Score"] = disp["Score"].apply(lambda x: f"{x}/5")
+        disp["Price"] = disp["Price"].apply(lambda x: f"₹{x:,.2f}")
+        disp["Chg%"]  = disp["Chg%"].apply(lambda x: f"{'▲' if x>=0 else '▼'} {abs(x):.2f}%")
+        st.dataframe(disp, hide_index=True, use_container_width=True, height=300)
+        best_sym = results[0]["_sym"]
+        best_idx = stocks.index(best_sym) if best_sym in stocks else 0
     else:
-        st.info("👆 Click **Scan All Stocks** to get AI-scored signals for all stocks in this universe")
+        st.warning("⚠️ Could not load data — check internet connection")
         best_idx = 0
 
     stock = st.selectbox(
@@ -513,44 +550,115 @@ with col_main:
     else:
         pred = 0; ai_prob = 0.5
 
-    # ── SIGNAL ENGINE (UPGRADED — 5 checks) ──────────────────
+    # ── SIGNAL ENGINE ─────────────────────────────────────────
     st.markdown("---")
-    col_sig, col_pos = st.columns(2)
 
+    # ── SCORE CALCULATIONS ────────────────────────────────────
+    c_trend = last["Close"] > last["EMA20"] > last["EMA50"]
+    c_rsi   = 45 < last["RSI"] < 68
+    c_macd  = last["MACD"] > last["MACD_Signal"]
+    c_vol   = last["Vol_Ratio"] > 1.1
+    c_ai    = ai_prob > 0.55
+    rsi_ob  = last["RSI"] > 75
+    rsi_os  = last["RSI"] < 30
+    score   = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
+
+    tech_score  = sum([c_trend, c_rsi, c_macd, c_vol])   # 0–4
+    tech_pct    = round((tech_score / 4) * 100)           # 0–100%
+    ai_pct      = round(ai_prob * 100)                    # 0–100%
+    combined    = round(tech_pct * 0.5 + ai_pct * 0.5)   # weighted average
+
+    # Direction logic using combined score
+    if force_trade:
+        direction = "STRONG BUY"
+    elif rsi_ob:
+        direction = "WAIT"
+    elif combined >= 80 and not rsi_ob:
+        direction = "STRONG BUY"
+    elif combined >= 62 and tech_score >= 3 and ai_pct >= 40:
+        direction = "BUY"
+    elif combined <= 35:
+        direction = "SELL"
+    elif combined <= 45 and tech_score <= 1:
+        direction = "SELL"
+    else:
+        direction = "WAIT"
+
+    signal = direction in ["BUY", "STRONG BUY"]
+
+    # ── COMBINED SCORE METER (full width) ─────────────────────
+    if combined >= 80:
+        meter_color = "#00b880"; meter_bg = "#003d2a"; meter_label = "STRONG BUY ✅"
+    elif combined >= 62:
+        meter_color = "#27ae60"; meter_bg = "#1a3d20"; meter_label = "BUY"
+    elif combined >= 45:
+        meter_color = "#f39c12"; meter_bg = "#3d2a00"; meter_label = "WAIT / NEUTRAL"
+    else:
+        meter_color = "#e74c3c"; meter_bg = "#3d0a0a"; meter_label = "SELL / AVOID"
+
+    st.markdown(f"""
+<div style="background:{meter_bg};border:2px solid {meter_color};border-radius:12px;
+padding:16px 20px;margin-bottom:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <div style="font-size:13px;font-weight:600;color:#ccc;">🧠 Combined AI + Technical Score</div>
+    <div style="font-size:22px;font-weight:800;color:{meter_color};">{combined}%
+      <span style="font-size:13px;font-weight:500;margin-left:6px;">{meter_label}</span>
+    </div>
+  </div>
+  <div style="background:rgba(255,255,255,0.1);border-radius:99px;height:14px;margin-bottom:12px;position:relative;">
+    <div style="width:{combined}%;background:{meter_color};border-radius:99px;height:14px;
+    box-shadow:0 0 8px {meter_color}66;"></div>
+    <div style="position:absolute;left:80%;top:-4px;width:2px;height:22px;
+    background:#fff;opacity:0.4;"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;">
+    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
+      <div style="font-size:11px;color:#999;margin-bottom:3px;">🤖 AI Score</div>
+      <div style="font-size:22px;font-weight:700;color:{'#27ae60' if ai_pct>=60 else ('#f39c12' if ai_pct>=40 else '#e74c3c')};">{ai_pct}%</div>
+      <div style="font-size:10px;color:#888;">{'✅ Bullish' if ai_pct>=60 else ('⚠️ Neutral' if ai_pct>=40 else '🔴 Bearish')}</div>
+    </div>
+    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
+      <div style="font-size:11px;color:#999;margin-bottom:3px;">📊 Technical Score</div>
+      <div style="font-size:22px;font-weight:700;color:{'#27ae60' if tech_pct>=75 else ('#f39c12' if tech_pct>=50 else '#e74c3c')};">{tech_pct}%</div>
+      <div style="font-size:10px;color:#888;">{tech_score}/4 checks passed</div>
+    </div>
+    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
+      <div style="font-size:11px;color:#999;margin-bottom:3px;">🎯 RSI</div>
+      <div style="font-size:22px;font-weight:700;color:{'#e74c3c' if rsi_ob else ('#4e8fff' if rsi_os else '#27ae60')};">{last['RSI']:.0f}</div>
+      <div style="font-size:10px;color:#888;">{'🔴 Overbought' if rsi_ob else ('🔵 Oversold' if rsi_os else '🟢 Normal')}</div>
+    </div>
+  </div>
+  <div style="margin-top:10px;font-size:11px;color:#888;text-align:center;">
+    80%+ threshold required for STRONG BUY signal · Combined = (AI×50% + Technical×50%)
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    # ── SIGNAL BANNER ─────────────────────────────────────────
+    col_sig, col_pos = st.columns(2)
     with col_sig:
         st.markdown(f"#### 🎯 {selected_mode} Signal")
 
-        c_trend = last["Close"] > last["EMA20"] > last["EMA50"]
-        c_rsi   = 45 < last["RSI"] < 75
-        c_macd  = last["MACD"] > last["MACD_Signal"]
-        c_vol   = last["Vol_Ratio"] > 1.1
-        c_ai    = ai_prob > 0.55
-        score   = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
-
-        # SAFETY RULE: Block BUY if AI < 40% (strongly bearish)
-        ai_blocked = ai_prob < 0.40
-        signal = (score >= 3 and not ai_blocked) or force_trade
-
-        # Determine direction
-        if signal:
-            direction = "BUY"
-        elif ai_prob < 0.40 and score >= 2:
-            direction = "SELL"
-        else:
-            direction = "WAIT"
-
         checks = {
-            "Trend (Price > EMA20 > EMA50)":   c_trend,
-            "RSI Bullish (45–75)":              c_rsi,
-            "MACD > Signal Line":               c_macd,
-            "Volume Surge (> 1.1×)":            c_vol,
-            f"AI Bullish ({ai_prob*100:.0f}%)": c_ai,
+            "Trend (Price > EMA20 > EMA50)":       c_trend,
+            "RSI Bullish (45–68, not overbought)": c_rsi,
+            "MACD > Signal Line":                   c_macd,
+            "Volume Surge (> 1.1×)":                c_vol,
+            f"AI Bullish ({ai_pct}% > 55%)":       c_ai,
         }
 
-        if direction == "BUY":
-            st.success(f"🟢 BUY SIGNAL | Score {score}/5 | AI {ai_prob*100:.0f}%")
+        atr_now = float(last["ATR"])
+        if direction == "STRONG BUY":
+            st.success(f"🚀 STRONG BUY | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
             if ALERT_ON_SIGNAL:
-                atr_now = float(last["ATR"])
+                fire_alert(
+                    f"STRONG BUY [{selected_mode}]", stock, price,
+                    max(1, int((capital*risk/100)/max(atr_now*1.5,0.01))),
+                    round(price-atr_now*1.5,2), round(price+atr_now*3,2),
+                    score, mode
+                )
+        elif direction == "BUY":
+            st.success(f"🟢 BUY SIGNAL | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
+            if ALERT_ON_SIGNAL:
                 fire_alert(
                     f"BUY SIGNAL [{selected_mode}]", stock, price,
                     max(1, int((capital*risk/100)/max(atr_now*1.5,0.01))),
@@ -558,9 +666,8 @@ with col_main:
                     score, mode
                 )
         elif direction == "SELL":
-            st.error(f"🔴 SELL / SHORT SIGNAL | Score {score}/5 | AI {ai_prob*100:.0f}% (Bearish)")
+            st.error(f"🔴 SELL / AVOID | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
             if ALERT_ON_SIGNAL:
-                atr_now = float(last["ATR"])
                 fire_alert(
                     f"SELL SIGNAL [{selected_mode}]", stock, price,
                     max(1, int((capital*risk/100)/max(atr_now*1.5,0.01))),
@@ -568,24 +675,14 @@ with col_main:
                     score, mode
                 )
         else:
-            if ai_blocked:
-                st.warning(f"🟡 WAIT — AI Bearish ({ai_prob*100:.0f}%) | Score {score}/5 | Signal blocked for safety")
+            if rsi_ob:
+                st.warning(f"🟡 WAIT — RSI Overbought ({last['RSI']:.0f}) | Combined {combined}% | Wait for pullback")
+            elif combined < 62:
+                st.warning(f"🟡 WAIT — Combined {combined}% (need 62%+ for BUY, 80%+ for Strong BUY)")
             else:
-                st.warning(f"🟡 WAIT / NO TRADE | Score {score}/5 | AI {ai_prob*100:.0f}%")
+                st.warning(f"🟡 WAIT | Combined {combined}% | Need stronger confirmation")
 
-        # AI confidence bar
-        ai_color = "#27ae60" if ai_prob > 0.55 else ("#e74c3c" if ai_prob < 0.40 else "#f39c12")
-        ai_pct = int(ai_prob * 100)
-        st.markdown(f"""
-        <div style="background:#f8f9fa;border-radius:6px;padding:8px 12px;margin:6px 0;border:1px solid #e0e0e0;">
-        <div style="font-size:11px;color:#666;margin-bottom:4px;">🤖 AI Confidence</div>
-        <div style="background:#e0e0e0;border-radius:99px;height:8px;">
-          <div style="width:{ai_pct}%;background:{ai_color};border-radius:99px;height:8px;"></div>
-        </div>
-        <div style="font-size:12px;font-weight:600;color:{ai_color};margin-top:3px;">{ai_pct}% Bullish {'✅ Strong' if ai_pct>65 else ('⚠️ Weak' if ai_pct>40 else '🔴 Bearish')}</div>
-        </div>""", unsafe_allow_html=True)
-
-        chk_df = pd.DataFrame([{"Check": k, "Result": "✅" if v else "❌"} for k, v in checks.items()])
+        chk_df = pd.DataFrame([{"Check": k, "Pass": "✅" if v else "❌"} for k, v in checks.items()])
         st.dataframe(chk_df, hide_index=True, height=205)
 
     # ── POSITION SIZING (MODE-SPECIFIC — NEW) ─────────────────
@@ -612,9 +709,10 @@ with col_main:
 
         elif selected_mode == "🌊 Swing":
             qty = max(1, int(risk_amount / sl_dist))
-            p1,p2,p3,p4 = st.columns(4)
-            p1.metric("📦 Qty",      f"{qty} sh")
+            p1,p2 = st.columns(2)
+            p1.metric("📦 Qty",      f"{qty} shares")
             p2.metric("💸 Risk ₹",   f"₹{risk_amount:,.0f}")
+            p3,p4 = st.columns(2)
             p3.metric("🛡 Stop Loss", f"₹{stop_loss:,.2f}")
             p4.metric("🎯 Target",   f"₹{target_price:,.2f}")
             st.caption(f"Entry ₹{price:.2f}  |  ATR ₹{atr:.2f}  |  SL dist ₹{sl_dist:.2f}  |  R:R = {rr_ratio}:1  |  CNC")
