@@ -526,7 +526,18 @@ with col_main:
         c_vol   = last["Vol_Ratio"] > 1.1
         c_ai    = ai_prob > 0.55
         score   = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
-        signal  = score >= 3 or force_trade
+
+        # SAFETY RULE: Block BUY if AI < 40% (strongly bearish)
+        ai_blocked = ai_prob < 0.40
+        signal = (score >= 3 and not ai_blocked) or force_trade
+
+        # Determine direction
+        if signal:
+            direction = "BUY"
+        elif ai_prob < 0.40 and score >= 2:
+            direction = "SELL"
+        else:
+            direction = "WAIT"
 
         checks = {
             "Trend (Price > EMA20 > EMA50)":   c_trend,
@@ -536,7 +547,7 @@ with col_main:
             f"AI Bullish ({ai_prob*100:.0f}%)": c_ai,
         }
 
-        if signal:
+        if direction == "BUY":
             st.success(f"🟢 BUY SIGNAL | Score {score}/5 | AI {ai_prob*100:.0f}%")
             if ALERT_ON_SIGNAL:
                 atr_now = float(last["ATR"])
@@ -546,8 +557,33 @@ with col_main:
                     round(price-atr_now*1.5,2), round(price+atr_now*3,2),
                     score, mode
                 )
+        elif direction == "SELL":
+            st.error(f"🔴 SELL / SHORT SIGNAL | Score {score}/5 | AI {ai_prob*100:.0f}% (Bearish)")
+            if ALERT_ON_SIGNAL:
+                atr_now = float(last["ATR"])
+                fire_alert(
+                    f"SELL SIGNAL [{selected_mode}]", stock, price,
+                    max(1, int((capital*risk/100)/max(atr_now*1.5,0.01))),
+                    round(price+atr_now*1.5,2), round(price-atr_now*3,2),
+                    score, mode
+                )
         else:
-            st.warning(f"🟡 WAIT / NO TRADE | Score {score}/5 | AI {ai_prob*100:.0f}%")
+            if ai_blocked:
+                st.warning(f"🟡 WAIT — AI Bearish ({ai_prob*100:.0f}%) | Score {score}/5 | Signal blocked for safety")
+            else:
+                st.warning(f"🟡 WAIT / NO TRADE | Score {score}/5 | AI {ai_prob*100:.0f}%")
+
+        # AI confidence bar
+        ai_color = "#27ae60" if ai_prob > 0.55 else ("#e74c3c" if ai_prob < 0.40 else "#f39c12")
+        ai_pct = int(ai_prob * 100)
+        st.markdown(f"""
+        <div style="background:#f8f9fa;border-radius:6px;padding:8px 12px;margin:6px 0;border:1px solid #e0e0e0;">
+        <div style="font-size:11px;color:#666;margin-bottom:4px;">🤖 AI Confidence</div>
+        <div style="background:#e0e0e0;border-radius:99px;height:8px;">
+          <div style="width:{ai_pct}%;background:{ai_color};border-radius:99px;height:8px;"></div>
+        </div>
+        <div style="font-size:12px;font-weight:600;color:{ai_color};margin-top:3px;">{ai_pct}% Bullish {'✅ Strong' if ai_pct>65 else ('⚠️ Weak' if ai_pct>40 else '🔴 Bearish')}</div>
+        </div>""", unsafe_allow_html=True)
 
         chk_df = pd.DataFrame([{"Check": k, "Result": "✅" if v else "❌"} for k, v in checks.items()])
         st.dataframe(chk_df, hide_index=True, height=205)
