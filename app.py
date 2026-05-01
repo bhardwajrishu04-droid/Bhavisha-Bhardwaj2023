@@ -264,33 +264,201 @@ if role == "admin":
         st.session_state.admin = True
 
 if st.session_state.admin:
-    st.title("🛠 ADMIN PANEL")
-    pending = [u for u in users if users[u].get("status") == "pending"]
-    active  = [u for u in users if users[u].get("status") == "active"]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Users", len(users)-1)
-    c2.metric("Active", len([u for u in active if u != "admin"]))
-    c3.metric("Pending", len(pending))
-    st.subheader("⏳ Pending Users")
-    for u in pending:
-        c1, c2 = st.columns(2)
-        if c1.button(f"Approve {u}", key=f"ap_{u}"):
-            users[u]["status"] = "active"
-            users[u]["expiry"] = str(datetime.date.today() + datetime.timedelta(days=30))
-            json.dump(users, open(DB, "w")); st.rerun()
-        if c2.button(f"Reject {u}", key=f"rj_{u}"):
-            del users[u]; json.dump(users, open(DB, "w")); st.rerun()
-    st.subheader("✅ Active Users")
-    for u in active:
-        if u == "admin": continue
-        st.write(f"{u} | Expiry: {users[u]['expiry']}")
-        c1, c2 = st.columns(2)
-        if c1.button(f"Extend {u}", key=f"ex_{u}"):
-            cur = datetime.datetime.strptime(users[u]["expiry"], "%Y-%m-%d").date()
-            users[u]["expiry"] = str(max(cur, datetime.date.today()) + datetime.timedelta(days=30))
-            json.dump(users, open(DB, "w")); st.rerun()
-        if c2.button(f"Delete {u}", key=f"dl_{u}"):
-            del users[u]; json.dump(users, open(DB, "w")); st.rerun()
+    st.title("🛠 ADMIN PANEL — AI Trading PRO+")
+
+    # ── METRICS ──────────────────────────────────────────────
+    all_users  = [u for u in users if u != "admin"]
+    active_u   = [u for u in all_users if users[u].get("status") == "active"]
+    pending_u  = [u for u in all_users if users[u].get("status") == "pending"]
+    expiring_u = []
+    for u in active_u:
+        try:
+            exp = datetime.datetime.strptime(users[u]["expiry"], "%Y-%m-%d").date()
+            if (exp - datetime.date.today()).days <= 7:
+                expiring_u.append(u)
+        except: pass
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("👥 Total Users", len(all_users))
+    c2.metric("✅ Active",      len(active_u))
+    c3.metric("⏳ Pending",     len(pending_u))
+    c4.metric("⚠️ Expiring Soon", len(expiring_u))
+    st.markdown("---")
+
+    # ── ADD NEW USER (after payment verified) ─────────────────
+    st.subheader("➕ Add New User (Payment Received)")
+    st.caption("User ne payment kar diya — yahan se directly account banao aur credentials bhejo")
+
+    with st.form("add_user_form"):
+        fc1, fc2 = st.columns(2)
+        new_username = fc1.text_input("Username *", placeholder="e.g. Rajesh2024")
+        new_password = fc2.text_input("Password *", placeholder="e.g. Raj@1234")
+        fd1, fd2 = st.columns(2)
+        new_plan = fd1.selectbox("Plan *", ["monthly (30 days — ₹499)",
+                                            "quarterly (90 days — ₹999)",
+                                            "annual (365 days — ₹2,999)"])
+        new_txn  = fd2.text_input("UPI Txn ID *", placeholder="e.g. T2405011234567")
+        fe1, fe2 = st.columns(2)
+        new_email = fe1.text_input("User Email (for credentials)",  placeholder="user@gmail.com")
+        new_phone = fe2.text_input("User WhatsApp (+91...)",        placeholder="+919876543210")
+        submitted = st.form_submit_button("✅ Create Account & Send Credentials", type="primary", use_container_width=True)
+
+    if submitted:
+        if not new_username or not new_password:
+            st.error("❌ Username and password required")
+        elif new_username in users:
+            st.error(f"❌ Username '{new_username}' already exists — choose a different one")
+        else:
+            plan_key = new_plan.split(" ")[0]  # "monthly" / "quarterly" / "annual"
+            plan_days = {"monthly":30,"quarterly":90,"annual":365}.get(plan_key, 30)
+            expiry_date = str(datetime.date.today() + datetime.timedelta(days=plan_days))
+
+            users[new_username] = {
+                "password": new_password,
+                "role":     "user",
+                "status":   "active",
+                "expiry":   expiry_date,
+                "plan":     plan_key,
+                "email":    new_email,
+                "phone":    new_phone,
+                "txn_id":   new_txn,
+                "joined":   str(datetime.date.today()),
+            }
+            json.dump(users, open(DB, "w"))
+
+            st.success(f"✅ User '{new_username}' created! Active until {expiry_date}")
+
+            # Send welcome email
+            if new_email:
+                try:
+                    from config import SMTP_USER, SMTP_PASS, SMTP_SERVER, SMTP_PORT, EMAIL_ALERTS_ON
+                    import smtplib
+                    from email.mime.text import MIMEText
+                    from email.mime.multipart import MIMEMultipart
+                    if EMAIL_ALERTS_ON:
+                        msg = MIMEMultipart("alternative")
+                        msg["Subject"] = "🎉 AI Trading PRO+ — Account Active!"
+                        msg["From"]    = SMTP_USER
+                        msg["To"]      = new_email
+                        html = f"""<html><body>
+<div style='font-family:Arial;max-width:460px;margin:20px auto;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;'>
+  <div style='background:#0a0c10;padding:14px 20px;'><span style='color:#00e5a0;font-size:17px;font-weight:700;'>📈 AI Trading PRO+</span></div>
+  <div style='padding:20px;'>
+    <h2 style='color:#1a1a2e;'>Welcome! Account is Active 🎉</h2>
+    <p style='color:#555;font-size:14px;'>Your payment is verified. Here are your login details:</p>
+    <table style='width:100%;font-size:14px;background:#f8f9fa;border-radius:8px;padding:12px;'>
+      <tr><td style='color:#888;padding:5px 0;'>🔑 Username</td><td style='font-weight:600;'>{new_username}</td></tr>
+      <tr><td style='color:#888;padding:5px 0;'>🔒 Password</td><td style='font-weight:600;'>{new_password}</td></tr>
+      <tr><td style='color:#888;padding:5px 0;'>📦 Plan</td><td style='font-weight:600;'>{plan_key.title()}</td></tr>
+      <tr><td style='color:#888;padding:5px 0;'>📅 Valid Until</td><td style='font-weight:600;color:#27ae60;'>{expiry_date}</td></tr>
+    </table>
+    <p style='color:#888;font-size:12px;margin-top:16px;'>Contact: bhardwaj.rishu04@gmail.com | WhatsApp: +91 98051 84822</p>
+  </div>
+</div></body></html>"""
+                        msg.attach(MIMEText(html, "html"))
+                        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as srv:
+                            srv.ehlo(); srv.starttls()
+                            srv.login(SMTP_USER, SMTP_PASS)
+                            srv.sendmail(SMTP_USER, new_email, msg.as_string())
+                        st.success(f"📧 Credentials sent to {new_email}")
+                except Exception as e:
+                    st.warning(f"📧 Email send failed: {e}")
+
+            # Send welcome WhatsApp — 3 methods (any one works)
+            if new_phone:
+                import urllib.parse
+
+                # Clean phone number — remove spaces, dashes
+                clean_phone = new_phone.strip().replace(" ","").replace("-","")
+                if not clean_phone.startswith("+"):
+                    clean_phone = "+91" + clean_phone.lstrip("0")
+
+                # Build credentials message
+                wa_parts = [
+                    "*AI Trading PRO+ — Account Active!*",
+                    "Username: " + new_username,
+                    "Password: " + new_password,
+                    "Plan: " + plan_key.title() + " (" + expiry_date + ")",
+                    "Contact admin for app link: +91 98051 84822"
+                ]
+                wa_text = urllib.parse.quote("\n".join(wa_parts))
+
+                # Method 1: Direct WhatsApp link (always works — admin clicks it)
+                wa_link = f"https://wa.me/{clean_phone.replace('+','')}?text={wa_text}"
+                st.markdown(f"""
+<div style='background:#003d2a;border:1px solid #00b880;border-radius:8px;
+padding:12px 16px;margin:8px 0;'>
+<b style='color:#00e5a0;'>📱 Send Credentials via WhatsApp</b><br>
+<span style='color:#aaa;font-size:12px;'>Click button below — WhatsApp will open with credentials pre-filled. Just press Send.</span><br><br>
+<a href='{wa_link}' target='_blank'
+style='background:#25d366;color:#000;padding:8px 20px;border-radius:6px;
+font-weight:700;font-size:13px;text-decoration:none;display:inline-block;'>
+📲 Open WhatsApp & Send to {clean_phone}
+</a>
+</div>""", unsafe_allow_html=True)
+
+                # Method 2: CallMeBot (if configured)
+                try:
+                    from config import CALLMEBOT_APIKEY, CALLMEBOT_ALERTS_ON
+                    import requests
+                    if CALLMEBOT_ALERTS_ON and CALLMEBOT_APIKEY:
+                        cb_url = f"https://api.callmebot.com/whatsapp.php?phone={clean_phone}&text={wa_text}&apikey={CALLMEBOT_APIKEY}"
+                        r = requests.get(cb_url, timeout=12)
+                        if "Message queued" in r.text or r.status_code == 200:
+                            st.success(f"📱 Auto-sent via CallMeBot to {clean_phone}")
+                        else:
+                            st.caption(f"CallMeBot: {r.text[:60]}")
+                except Exception:
+                    pass
+
+            st.rerun()
+
+    st.markdown("---")
+
+    # ── PENDING APPROVALS ─────────────────────────────────────
+    if pending_u:
+        st.subheader(f"⏳ Pending Approvals ({len(pending_u)})")
+        st.caption("Ye users ne signup kiya lekin payment confirm nahi hua")
+        for u in pending_u:
+            with st.expander(f"👤 {u} — joined {users[u].get('joined','?')}"):
+                st.write(f"Email: {users[u].get('email','—')} | Phone: {users[u].get('phone','—')}")
+                pc1, pc2, pc3 = st.columns(3)
+                ap_plan = pc1.selectbox("Plan", list({"monthly":30,"quarterly":90,"annual":365}.keys()), key=f"pl_{u}")
+                if pc2.button(f"✅ Approve", key=f"ap_{u}"):
+                    plan_days = {"monthly":30,"quarterly":90,"annual":365}[ap_plan]
+                    users[u]["status"] = "active"
+                    users[u]["expiry"] = str(datetime.date.today() + datetime.timedelta(days=plan_days))
+                    users[u]["plan"]   = ap_plan
+                    json.dump(users, open(DB, "w"))
+                    st.success(f"✅ {u} approved for {ap_plan}")
+                    st.rerun()
+                if pc3.button(f"❌ Reject", key=f"rj_{u}"):
+                    del users[u]; json.dump(users, open(DB, "w")); st.rerun()
+    else:
+        st.info("✅ No pending approvals")
+
+    st.markdown("---")
+
+    # ── ACTIVE USERS ──────────────────────────────────────────
+    st.subheader(f"✅ Active Users ({len(active_u)})")
+    for u in active_u:
+        exp = users[u].get("expiry","?")
+        try:
+            days_left = (datetime.datetime.strptime(exp,"%Y-%m-%d").date()-datetime.date.today()).days
+            exp_label = f"⚠️ {days_left}d left" if days_left <= 7 else f"{days_left}d left"
+        except:
+            exp_label = exp
+        with st.expander(f"👤 {u} | {users[u].get('plan','?').title()} | {exp} ({exp_label})"):
+            st.caption(f"Email: {users[u].get('email','—')} | Phone: {users[u].get('phone','—')} | Txn: {users[u].get('txn_id','—')}")
+            ec1,ec2,ec3 = st.columns(3)
+            ext_days = ec1.number_input("Extend days", 1, 365, 30, key=f"ed_{u}")
+            if ec2.button(f"🔄 Extend", key=f"ex_{u}"):
+                cur = datetime.datetime.strptime(users[u]["expiry"],"%Y-%m-%d").date()
+                users[u]["expiry"] = str(max(cur,datetime.date.today())+datetime.timedelta(days=int(ext_days)))
+                json.dump(users,open(DB,"w")); st.rerun()
+            if ec3.button(f"🗑 Delete", key=f"dl_{u}"):
+                del users[u]; json.dump(users,open(DB,"w")); st.rerun()
+
     st.stop()
 
 if users[user]["status"] != "active":
