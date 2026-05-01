@@ -4,3 +4,6 @@ pandas
 plotly
 kiteconnect
 numpy
+scikit-learn
+requests
+twilio
