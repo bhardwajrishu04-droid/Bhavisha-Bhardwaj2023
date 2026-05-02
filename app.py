@@ -28,41 +28,50 @@ try:
 except ImportError:
     PLOTLY_OK = False
 
-# ── Safe config import — works even if variables are missing ──
-try:
-    import config as _cfg
-except ImportError:
-    _cfg = None
+# ── Config loader — Streamlit Secrets (cloud) + config.py (local) ──
+import streamlit as st
 
-def _get(key, default):
-    return getattr(_cfg, key, default) if _cfg else default
+def _get_secret(key, default):
+    """Read from Streamlit Secrets first, then config.py, then default."""
+    # Try Streamlit Secrets (used on Streamlit Cloud)
+    try:
+        return st.secrets[key]
+    except Exception:
+        pass
+    # Try local config.py (used on local PC)
+    try:
+        import config as _cfg
+        return getattr(_cfg, key, default)
+    except Exception:
+        pass
+    return default
 
-API_KEY      = _get("API_KEY",      "")
-API_SECRET   = _get("API_SECRET",   "")
-ACCESS_TOKEN = _get("ACCESS_TOKEN", "")
+API_KEY      = _get_secret("API_KEY",      "")
+API_SECRET   = _get_secret("API_SECRET",   "")
+ACCESS_TOKEN = _get_secret("ACCESS_TOKEN", "")
 
-EMAIL_ALERTS_ON    = _get("EMAIL_ALERTS_ON",    False)
-ALERT_EMAIL_TO     = _get("ALERT_EMAIL_TO",     "")
-SMTP_USER          = _get("SMTP_USER",          "")
-SMTP_PASS          = _get("SMTP_PASS",          "")
-SMTP_SERVER        = _get("SMTP_SERVER",        "smtp.gmail.com")
-SMTP_PORT          = _get("SMTP_PORT",          587)
+EMAIL_ALERTS_ON    = _get_secret("EMAIL_ALERTS_ON",    False)
+ALERT_EMAIL_TO     = _get_secret("ALERT_EMAIL_TO",     "")
+SMTP_USER          = _get_secret("SMTP_USER",          "")
+SMTP_PASS          = _get_secret("SMTP_PASS",          "")
+SMTP_SERVER        = _get_secret("SMTP_SERVER",        "smtp.gmail.com")
+SMTP_PORT          = _get_secret("SMTP_PORT",          587)
 
-CALLMEBOT_ALERTS_ON = _get("CALLMEBOT_ALERTS_ON", False)
-CALLMEBOT_PHONE     = _get("CALLMEBOT_PHONE",     "")
-CALLMEBOT_APIKEY    = _get("CALLMEBOT_APIKEY",    "")
+CALLMEBOT_ALERTS_ON = _get_secret("CALLMEBOT_ALERTS_ON", False)
+CALLMEBOT_PHONE     = _get_secret("CALLMEBOT_PHONE",     "")
+CALLMEBOT_APIKEY    = _get_secret("CALLMEBOT_APIKEY",    "")
 
-TWILIO_ALERTS_ON = _get("TWILIO_ALERTS_ON", False)
-TWILIO_SID       = _get("TWILIO_SID",       "")
-TWILIO_TOKEN     = _get("TWILIO_TOKEN",     "")
-TWILIO_FROM      = _get("TWILIO_FROM",      "whatsapp:+14155238886")
-TWILIO_TO        = _get("TWILIO_TO",        "")
+TWILIO_ALERTS_ON = _get_secret("TWILIO_ALERTS_ON", False)
+TWILIO_SID       = _get_secret("TWILIO_SID",       "")
+TWILIO_TOKEN     = _get_secret("TWILIO_TOKEN",     "")
+TWILIO_FROM      = _get_secret("TWILIO_FROM",      "whatsapp:+14155238886")
+TWILIO_TO        = _get_secret("TWILIO_TO",        "")
 
-ALERT_ON_SIGNAL    = _get("ALERT_ON_SIGNAL",    True)
-ALERT_ON_EXECUTION = _get("ALERT_ON_EXECUTION", True)
-ALERT_MIN_SCORE    = _get("ALERT_MIN_SCORE",    3)
-ALERT_COOLDOWN_MIN = _get("ALERT_COOLDOWN_MIN", 15)
-APP_URL            = _get("APP_URL", "https://bhavisha-ai-trading-pro.streamlit.app")
+ALERT_ON_SIGNAL    = _get_secret("ALERT_ON_SIGNAL",    True)
+ALERT_ON_EXECUTION = _get_secret("ALERT_ON_EXECUTION", True)
+ALERT_MIN_SCORE    = _get_secret("ALERT_MIN_SCORE",    3)
+ALERT_COOLDOWN_MIN = _get_secret("ALERT_COOLDOWN_MIN", 15)
+APP_URL            = _get_secret("APP_URL", "https://bhavisha-ai-trading-pro.streamlit.app")
 
 try:
     from alerts import send_alert
