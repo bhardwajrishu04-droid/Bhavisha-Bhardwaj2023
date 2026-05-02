@@ -1,40 +1,33 @@
 # =============================================================
 # config.py — AI Trading PRO+ v1.3
-# Pre-filled for: Rishu Bhardwaj (Deepak Bhardwaj)
+# COMPLETE VERSION — all variables included
 # =============================================================
 
-# ── Kite Connect credentials ──────────────────────────────────
+# ── Kite Connect ──────────────────────────────────────────────
 API_KEY      = "6c3uhkm1yw56fd8u"
 API_SECRET   = "fi60nvnc50gjyjl5rmsyq7jmrvl1yyyl"
-ACCESS_TOKEN = ""   # filled automatically after Kite login
+ACCESS_TOKEN = ""
 
 # =============================================================
-# EMAIL ALERTS — Gmail SMTP
+# EMAIL ALERTS
 # =============================================================
-EMAIL_ALERTS_ON = True    # ✅ ENABLED
+EMAIL_ALERTS_ON = True
 
 ALERT_EMAIL_TO = "bhardwaj.rishu04@gmail.com"
 SMTP_USER      = "bhardwaj.rishu04@gmail.com"
-SMTP_PASS      = "xezpjztkqqtjwnjw"    # ✅ App Password set
+SMTP_PASS      = "xezpjztkqqtjwnjw"
 SMTP_SERVER    = "smtp.gmail.com"
 SMTP_PORT      = 587
 
 # =============================================================
-# WHATSAPP ALERTS — CallMeBot (FREE)
+# WHATSAPP — CallMeBot (FREE)
 # =============================================================
-# TO ENABLE:
-#   1. Save +34 644 60 42 96 in contacts as "CallMeBot"
-#   2. Send this WhatsApp message to that number:
-#          I allow callmebot to send me messages
-#   3. You'll get API key in reply — paste below
-#   4. Change CALLMEBOT_ALERTS_ON = True
-
 CALLMEBOT_ALERTS_ON = False
 CALLMEBOT_PHONE     = "+919805184822"
-CALLMEBOT_APIKEY    = ""   # ← paste your CallMeBot API key here
+CALLMEBOT_APIKEY    = ""
 
 # =============================================================
-# WHATSAPP ALERTS — Twilio (optional)
+# WHATSAPP — Twilio (optional)
 # =============================================================
 TWILIO_ALERTS_ON = False
 TWILIO_SID       = ""
@@ -45,12 +38,12 @@ TWILIO_TO        = "whatsapp:+919805184822"
 # =============================================================
 # ALERT BEHAVIOUR
 # =============================================================
-ALERT_ON_SIGNAL    = True    # alert when BUY signal detected
-ALERT_ON_EXECUTION = True    # alert when BUY/SELL order placed
-ALERT_MIN_SCORE    = 3       # minimum score to trigger alert
-ALERT_COOLDOWN_MIN = 15      # minutes gap between repeat alerts
+ALERT_ON_SIGNAL    = True
+ALERT_ON_EXECUTION = True
+ALERT_MIN_SCORE    = 3
+ALERT_COOLDOWN_MIN = 15
 
 # =============================================================
-# APP PUBLIC URL — ✅ UPDATED
+# APP PUBLIC URL
 # =============================================================
 APP_URL = "https://bhavisha-ai-trading-pro.streamlit.app"
