@@ -28,11 +28,41 @@ try:
 except ImportError:
     PLOTLY_OK = False
 
-from config import (
-    API_KEY, API_SECRET,
-    ALERT_ON_SIGNAL, ALERT_ON_EXECUTION,
-    ALERT_MIN_SCORE, ALERT_COOLDOWN_MIN,
-)
+# ── Safe config import — works even if variables are missing ──
+try:
+    import config as _cfg
+except ImportError:
+    _cfg = None
+
+def _get(key, default):
+    return getattr(_cfg, key, default) if _cfg else default
+
+API_KEY      = _get("API_KEY",      "")
+API_SECRET   = _get("API_SECRET",   "")
+ACCESS_TOKEN = _get("ACCESS_TOKEN", "")
+
+EMAIL_ALERTS_ON    = _get("EMAIL_ALERTS_ON",    False)
+ALERT_EMAIL_TO     = _get("ALERT_EMAIL_TO",     "")
+SMTP_USER          = _get("SMTP_USER",          "")
+SMTP_PASS          = _get("SMTP_PASS",          "")
+SMTP_SERVER        = _get("SMTP_SERVER",        "smtp.gmail.com")
+SMTP_PORT          = _get("SMTP_PORT",          587)
+
+CALLMEBOT_ALERTS_ON = _get("CALLMEBOT_ALERTS_ON", False)
+CALLMEBOT_PHONE     = _get("CALLMEBOT_PHONE",     "")
+CALLMEBOT_APIKEY    = _get("CALLMEBOT_APIKEY",    "")
+
+TWILIO_ALERTS_ON = _get("TWILIO_ALERTS_ON", False)
+TWILIO_SID       = _get("TWILIO_SID",       "")
+TWILIO_TOKEN     = _get("TWILIO_TOKEN",     "")
+TWILIO_FROM      = _get("TWILIO_FROM",      "whatsapp:+14155238886")
+TWILIO_TO        = _get("TWILIO_TO",        "")
+
+ALERT_ON_SIGNAL    = _get("ALERT_ON_SIGNAL",    True)
+ALERT_ON_EXECUTION = _get("ALERT_ON_EXECUTION", True)
+ALERT_MIN_SCORE    = _get("ALERT_MIN_SCORE",    3)
+ALERT_COOLDOWN_MIN = _get("ALERT_COOLDOWN_MIN", 15)
+APP_URL            = _get("APP_URL", "https://bhavisha-ai-trading-pro.streamlit.app")
 
 try:
     from alerts import send_alert
@@ -182,10 +212,7 @@ st.sidebar.subheader("🔔 Alert Settings")
 if not ALERTS_AVAILABLE:
     st.sidebar.error(f"alerts.py import failed:\n{_ALERT_IMPORT_ERROR}")
 else:
-    from config import (
-        EMAIL_ALERTS_ON, CALLMEBOT_ALERTS_ON, TWILIO_ALERTS_ON,
-        ALERT_EMAIL_TO, CALLMEBOT_PHONE,
-    )
+    # values already loaded above safely
     if EMAIL_ALERTS_ON:
         st.sidebar.success(f"📧 Email → {ALERT_EMAIL_TO}")
     else:
@@ -331,7 +358,6 @@ if st.session_state.admin:
             # Send welcome email
             if new_email:
                 try:
-                    from config import SMTP_USER, SMTP_PASS, SMTP_SERVER, SMTP_PORT, EMAIL_ALERTS_ON
                     import smtplib
                     from email.mime.text import MIMEText
                     from email.mime.multipart import MIMEMultipart
@@ -353,6 +379,18 @@ if st.session_state.admin:
       <tr><td style='color:#888;padding:5px 0;'>📅 Valid Until</td><td style='font-weight:600;color:#27ae60;'>{expiry_date}</td></tr>
     </table>
     <p style='color:#888;font-size:12px;margin-top:16px;'>Contact: bhardwaj.rishu04@gmail.com | WhatsApp: +91 98051 84822</p>
+    </div>
+    <div style='background:#003d2a;border:1px solid #00b880;border-radius:8px;
+    padding:14px;margin:14px 0;text-align:center;'>
+      <p style='color:#00e5a0;font-weight:700;font-size:15px;margin-bottom:8px;'>
+      Click below to access your Trading App</p>
+      <a href='' + APP_URL + ''
+      style='background:#00e5a0;color:#000;padding:10px 28px;border-radius:6px;
+      font-weight:700;font-size:14px;text-decoration:none;display:inline-block;'>
+      Login to AI Trading PRO+</a>
+      <p style='color:#aaa;font-size:11px;margin-top:8px;'>
+      Username &amp; Password are shown above</p>
+    </div
   </div>
 </div></body></html>"""
                         msg.attach(MIMEText(html, "html"))
