@@ -153,6 +153,43 @@ for _k, _v in {
         st.session_state[_k] = _v
 
 # =============================================================
+# PERSISTENT TRADE STORAGE — defined early so login can use them
+# =============================================================
+def get_trade_file(username):
+    return f"trades_{username}.json"
+
+def load_user_data(username):
+    fpath = get_trade_file(username)
+    default = {
+        "trade_log":      [],
+        "pnl_history":    [],
+        "paper_balance":  100000.0,
+        "paper_position": None,
+    }
+    if not os.path.exists(fpath):
+        return default
+    try:
+        data = json.load(open(fpath, "r"))
+        for k, v in default.items():
+            if k not in data:
+                data[k] = v
+        return data
+    except Exception:
+        return default
+
+def save_user_data(username):
+    fpath = get_trade_file(username)
+    try:
+        json.dump({
+            "trade_log":      st.session_state.trade_log,
+            "pnl_history":    st.session_state.pnl_history,
+            "paper_balance":  st.session_state.paper_balance,
+            "paper_position": st.session_state.paper_position,
+        }, open(fpath, "w"), indent=2, default=str)
+    except Exception as e:
+        st.warning(f"Could not save trade data: {e}")
+
+# =============================================================
 # ALERT HELPER
 # =============================================================
 def fire_alert(action, stk, px, q, sl, tgt, sc, md, pnl=None):
@@ -495,49 +532,6 @@ def can_trade():
 def kite_ok():
     try: kite.profile(); return True
     except: return False
-
-# =============================================================
-# PERSISTENT TRADE STORAGE — saves data per user to JSON file
-# =============================================================
-def get_trade_file(username):
-    """Each user gets their own trade data file."""
-    return f"trades_{username}.json"
-
-def load_user_data(username):
-    """Load user's saved trade data from file."""
-    fpath = get_trade_file(username)
-    default = {
-        "trade_log":       [],
-        "pnl_history":     [],
-        "paper_balance":   100000.0,
-        "paper_position":  None,
-    }
-    if not os.path.exists(fpath):
-        return default
-    try:
-        data = json.load(open(fpath, "r"))
-        # Fill any missing keys
-        for k, v in default.items():
-            if k not in data:
-                data[k] = v
-        return data
-    except Exception:
-        return default
-
-def save_user_data(username):
-    """Save current session trade data to file."""
-    fpath = get_trade_file(username)
-    data = {
-        "trade_log":      st.session_state.trade_log,
-        "pnl_history":    st.session_state.pnl_history,
-        "paper_balance":  st.session_state.paper_balance,
-        "paper_position": st.session_state.paper_position,
-    }
-    try:
-        json.dump(data, open(fpath, "w"), indent=2, default=str)
-    except Exception as e:
-        st.warning(f"⚠️ Could not save trade data: {e}")
-
 
 def compute_indicators(df):
     df = df.copy()
