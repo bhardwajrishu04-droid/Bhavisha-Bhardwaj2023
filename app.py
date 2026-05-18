@@ -260,7 +260,14 @@ if not st.session_state.user:
                 exp = users[u].get("expiry", "2000-01-01")
                 if datetime.date.today() > datetime.datetime.strptime(exp, "%Y-%m-%d").date():
                     st.error("❌ Subscription Expired"); st.stop()
-                st.session_state.user = u; st.rerun()
+                st.session_state.user = u
+                # Load saved trade data for this user
+                saved = load_user_data(u)
+                st.session_state.trade_log      = saved["trade_log"]
+                st.session_state.pnl_history    = saved["pnl_history"]
+                st.session_state.paper_balance  = saved["paper_balance"]
+                st.session_state.paper_position = saved["paper_position"]
+                st.rerun()
             else:
                 st.error("Invalid Login")
     with tab2:
@@ -488,6 +495,49 @@ def can_trade():
 def kite_ok():
     try: kite.profile(); return True
     except: return False
+
+# =============================================================
+# PERSISTENT TRADE STORAGE — saves data per user to JSON file
+# =============================================================
+def get_trade_file(username):
+    """Each user gets their own trade data file."""
+    return f"trades_{username}.json"
+
+def load_user_data(username):
+    """Load user's saved trade data from file."""
+    fpath = get_trade_file(username)
+    default = {
+        "trade_log":       [],
+        "pnl_history":     [],
+        "paper_balance":   100000.0,
+        "paper_position":  None,
+    }
+    if not os.path.exists(fpath):
+        return default
+    try:
+        data = json.load(open(fpath, "r"))
+        # Fill any missing keys
+        for k, v in default.items():
+            if k not in data:
+                data[k] = v
+        return data
+    except Exception:
+        return default
+
+def save_user_data(username):
+    """Save current session trade data to file."""
+    fpath = get_trade_file(username)
+    data = {
+        "trade_log":      st.session_state.trade_log,
+        "pnl_history":    st.session_state.pnl_history,
+        "paper_balance":  st.session_state.paper_balance,
+        "paper_position": st.session_state.paper_position,
+    }
+    try:
+        json.dump(data, open(fpath, "w"), indent=2, default=str)
+    except Exception as e:
+        st.warning(f"⚠️ Could not save trade data: {e}")
+
 
 def compute_indicators(df):
     df = df.copy()
@@ -896,6 +946,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 st.session_state.paper_balance -= live_px*qty
                 log_trade("BUY",stock,live_px,qty,"Paper")
                 st.success(f"📄 Paper BUY | {sym} | ₹{live_px:.2f}×{qty} | SL ₹{stop_loss} | TGT ₹{target_price}")
+                save_user_data(user)  # persist to file
                 if ALERT_ON_EXECUTION:
                     fire_alert(f"BUY EXECUTED [{selected_mode}]",stock,live_px,qty,stop_loss,target_price,score,"Paper")
                 return
@@ -912,6 +963,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 st.session_state.paper_position = None
                 emoji = "🟢" if pnl>=0 else "🔴"
                 st.success(f"📄 Paper SELL | {sym} | ₹{live_px:.2f} | P&L: {emoji} ₹{pnl:+.2f}")
+                save_user_data(user)  # persist to file
                 if ALERT_ON_EXECUTION:
                     fire_alert(f"SELL EXECUTED [{selected_mode}]",stock,live_px,pos["qty"],
                                pos["stop_loss"],pos["target"],score,"Paper",pnl=pnl)
@@ -924,6 +976,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                              order_type="MARKET",product=mcfg["product"])
             log_trade(txn,stock,price,fo_qty,"Live")
             st.success(f"✅ Live {txn} | {sym}×{fo_qty} | {mcfg['product']}")
+            save_user_data(user)  # persist to file
             if ALERT_ON_EXECUTION:
                 fire_alert(f"{txn} LIVE [{selected_mode}]",stock,price,fo_qty,stop_loss,target_price,score,"Live")
         except Exception as e:
@@ -1069,6 +1122,11 @@ if st.session_state.trade_log:
         st.subheader("📈 Cumulative P&L")
         st.line_chart(pnl_df.set_index("time")["Cumulative P&L"])
     if st.button("🗑 Clear Logs"):
-        st.session_state.trade_log = []; st.session_state.pnl_history = []; st.rerun()
+        st.session_state.trade_log      = []
+        st.session_state.pnl_history    = []
+        st.session_state.paper_balance  = 100000.0
+        st.session_state.paper_position = None
+        save_user_data(user)  # clear file too
+        st.rerun()
 else:
     st.info("No trades yet — place your first trade above")
