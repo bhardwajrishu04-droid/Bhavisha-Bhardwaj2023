@@ -733,6 +733,445 @@ def get_ta_summary(df):
             "buys":buys,"sells":sells,"neutrals":total-buys-sells,"total":total}
 
 
+
+# =============================================================
+# ADVANCED TRADING TECHNIQUES MODULE
+# 1. Price Action (HH/LL, Structure, Demand/Supply)
+# 2. SMC (Order Block, Liquidity, FVG, BOS)
+# 3. Volume Profile (POC, VAH, VAL)
+# 4. Options Data (PCR, Max Pain, OI)
+# 5. Kelly Criterion Position Sizing
+# 6. Opening Range Breakout (ORB)
+# =============================================================
+
+
+# ── 1. PRICE ACTION: Market Structure ───────────────────────
+def detect_market_structure(df, lookback=5):
+    """Detect HH/HL (uptrend) or LH/LL (downtrend) + Market Structure Shift."""
+    if len(df) < lookback*3:
+        return {}
+    closes = df["Close"].values
+    highs  = df["High"].values
+    lows   = df["Low"].values
+
+    # Find swing highs and lows
+    swing_highs, swing_lows = [], []
+    n = lookback
+    for i in range(n, len(df)-n):
+        if all(highs[i] >= highs[i-n:i]) and all(highs[i] >= highs[i+1:i+n+1]):
+            swing_highs.append((i, highs[i]))
+        if all(lows[i]  <= lows[i-n:i])  and all(lows[i]  <= lows[i+1:i+n+1]):
+            swing_lows.append((i,  lows[i]))
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return {"structure": "Not enough data", "trend": "Unknown"}
+
+    # Higher High / Higher Low = uptrend
+    last2_highs = swing_highs[-2:]
+    last2_lows  = swing_lows[-2:]
+    hh = last2_highs[1][1] > last2_highs[0][1]
+    lh = last2_highs[1][1] < last2_highs[0][1]
+    hl = last2_lows[1][1]  > last2_lows[0][1]
+    ll = last2_lows[1][1]  < last2_lows[0][1]
+
+    if hh and hl:
+        trend = "Uptrend (HH + HL)"
+        trend_color = "#00b880"
+        trend_icon  = "Bullish"
+    elif lh and ll:
+        trend = "Downtrend (LH + LL)"
+        trend_color = "#e74c3c"
+        trend_icon  = "Bearish"
+    elif hh and ll:
+        trend = "Choppy (HH + LL)"
+        trend_color = "#f39c12"
+        trend_icon  = "Neutral"
+    else:
+        trend = "Ranging (LH + HL)"
+        trend_color = "#a78bfa"
+        trend_icon  = "Neutral"
+
+    # Market Structure Shift detection
+    recent_high = max(h for _, h in swing_highs[-3:]) if swing_highs else 0
+    recent_low  = min(l for _, l in swing_lows[-3:])  if swing_lows  else 0
+    current     = float(df["Close"].iloc[-1])
+    atr         = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else (recent_high - recent_low)*0.05
+
+    mss = None
+    if ll and current > recent_high + atr*0.3:
+        mss = "BULLISH MSS — Break above recent high after lower lows"
+    elif hh and current < recent_low - atr*0.3:
+        mss = "BEARISH MSS — Break below recent low after higher highs"
+
+    return {
+        "trend": trend, "trend_color": trend_color, "trend_icon": trend_icon,
+        "hh": hh, "lh": lh, "hl": hl, "ll": ll,
+        "swing_highs": swing_highs[-5:],
+        "swing_lows":  swing_lows[-5:],
+        "mss": mss,
+        "recent_high": recent_high, "recent_low": recent_low,
+    }
+
+
+# ── 2. DEMAND / SUPPLY ZONES ─────────────────────────────────
+def find_demand_supply_zones(df, n=3):
+    """Find demand zones (support) and supply zones (resistance)."""
+    if len(df) < 20:
+        return [], []
+    highs  = df["High"].values
+    lows   = df["Low"].values
+    closes = df["Close"].values
+    atr    = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else float((df["High"]-df["Low"]).mean())
+
+    supply_zones, demand_zones = [], []
+
+    for i in range(n, len(df)-n):
+        # Supply zone: strong move down after consolidation
+        is_supply_top = (highs[i] == max(highs[max(0,i-n):i+n+1]))
+        if is_supply_top and closes[i] < closes[i-1]:
+            supply_zones.append({
+                "top":    round(highs[i], 2),
+                "bottom": round(highs[i] - atr*0.5, 2),
+                "idx":    i,
+                "strength": min(5, int((highs[i]-lows[i])/atr*2)+1),
+                "date":   str(df.index[i])[:10],
+            })
+
+        # Demand zone: strong move up after consolidation
+        is_demand_bot = (lows[i] == min(lows[max(0,i-n):i+n+1]))
+        if is_demand_bot and closes[i] > closes[i-1]:
+            demand_zones.append({
+                "top":    round(lows[i] + atr*0.5, 2),
+                "bottom": round(lows[i], 2),
+                "idx":    i,
+                "strength": min(5, int((highs[i]-lows[i])/atr*2)+1),
+                "date":   str(df.index[i])[:10],
+            })
+
+    # Return 3 most recent each
+    return supply_zones[-3:], demand_zones[-3:]
+
+
+# ── 3. FAKE BREAKOUT DETECTION ───────────────────────────────
+def detect_fake_breakout(df):
+    """Detect bull/bear traps (fake breakouts)."""
+    if len(df) < 20:
+        return []
+    results = []
+    atr = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 5
+    recent_high = float(df["High"].rolling(20).max().iloc[-2])
+    recent_low  = float(df["Low"].rolling(20).min().iloc[-2])
+
+    for i in range(2, min(10, len(df))):
+        row  = df.iloc[-i]
+        prev = df.iloc[-i-1]
+        h, l, c, o = float(row["High"]), float(row["Low"]), float(row["Close"]), float(row["Open"])
+        ph           = float(prev["High"])
+        pl           = float(prev["Low"])
+
+        # Bull trap: broke above resistance then closed back below
+        if h > recent_high and c < recent_high - atr*0.1:
+            results.append({
+                "type": "Bull Trap (Fake Breakout UP)",
+                "color": "#e74c3c",
+                "desc": f"Price broke above Rs.{recent_high:.2f} but closed back below — institutions trapped bulls",
+                "signal": "SELL",
+                "date": str(df.index[-i])[:10],
+            })
+
+        # Bear trap: broke below support then closed back above
+        if l < recent_low and c > recent_low + atr*0.1:
+            results.append({
+                "type": "Bear Trap (Fake Breakout DOWN)",
+                "color": "#00b880",
+                "desc": f"Price broke below Rs.{recent_low:.2f} but closed back above — institutions trapped bears",
+                "signal": "BUY",
+                "date": str(df.index[-i])[:10],
+            })
+
+    return results[:3]
+
+
+# ── 4. SMC: ORDER BLOCKS ─────────────────────────────────────
+def find_order_blocks(df):
+    """Find Order Blocks — last opposing candle before strong move."""
+    if len(df) < 10:
+        return []
+    obs = []
+    atr = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 5
+
+    for i in range(3, len(df)-2):
+        o  = float(df["Open"].iloc[i])
+        c  = float(df["Close"].iloc[i])
+        h  = float(df["High"].iloc[i])
+        l  = float(df["Low"].iloc[i])
+        c2 = float(df["Close"].iloc[i+1])
+        c3 = float(df["Close"].iloc[i+2]) if i+2 < len(df) else c2
+
+        move_after = abs(c3 - c)
+
+        # Bullish OB: last red candle before strong up move
+        if c < o and c3 > h and move_after > atr * 1.5:
+            obs.append({
+                "type": "Bullish Order Block",
+                "color": "#00b880",
+                "top":  round(max(o, c), 2),
+                "bottom": round(min(o, c), 2),
+                "idx": i,
+                "desc": "Institutional BUY zone — price likely to return here",
+                "signal": "BUY when price returns",
+                "date": str(df.index[i])[:10],
+            })
+
+        # Bearish OB: last green candle before strong down move
+        if c > o and c3 < l and move_after > atr * 1.5:
+            obs.append({
+                "type": "Bearish Order Block",
+                "color": "#e74c3c",
+                "top":  round(max(o, c), 2),
+                "bottom": round(min(o, c), 2),
+                "idx": i,
+                "desc": "Institutional SELL zone — price likely to reverse here",
+                "signal": "SELL when price returns",
+                "date": str(df.index[i])[:10],
+            })
+
+    return obs[-4:]
+
+
+# ── 5. SMC: FAIR VALUE GAPS (FVG) ────────────────────────────
+def find_fvg(df):
+    """Find Fair Value Gaps — imbalances in price."""
+    if len(df) < 5:
+        return []
+    fvgs = []
+    for i in range(1, len(df)-1):
+        h1 = float(df["High"].iloc[i-1])
+        l1 = float(df["Low"].iloc[i-1])
+        h2 = float(df["High"].iloc[i+1])
+        l2 = float(df["Low"].iloc[i+1])
+
+        # Bullish FVG: gap between candle[i-1] high and candle[i+1] low
+        if l2 > h1:
+            fvgs.append({
+                "type": "Bullish FVG",
+                "color": "#00b880",
+                "top": round(l2, 2),
+                "bottom": round(h1, 2),
+                "gap": round(l2-h1, 2),
+                "desc": "Price moved up fast — gap will likely be filled (BUY zone)",
+                "date": str(df.index[i])[:10],
+                "filled": float(df["Low"].iloc[-1]) <= l2,
+            })
+
+        # Bearish FVG: gap between candle[i-1] low and candle[i+1] high
+        if h2 < l1:
+            fvgs.append({
+                "type": "Bearish FVG",
+                "color": "#e74c3c",
+                "top": round(l1, 2),
+                "bottom": round(h2, 2),
+                "gap": round(l1-h2, 2),
+                "desc": "Price moved down fast — gap will likely be filled (SELL zone)",
+                "date": str(df.index[i])[:10],
+                "filled": float(df["High"].iloc[-1]) >= h2,
+            })
+
+    unfilled = [f for f in fvgs if not f["filled"]]
+    return unfilled[-4:]
+
+
+# ── 6. VOLUME PROFILE (POC, VAH, VAL) ────────────────────────
+def compute_volume_profile(df, bins=20):
+    """Compute Volume Profile — POC, Value Area High/Low."""
+    if len(df) < 10:
+        return {}
+    price_min = float(df["Low"].min())
+    price_max = float(df["High"].max())
+    price_range = price_max - price_min
+    bin_size = price_range / bins if price_range > 0 else 1
+
+    vol_at_price = {}
+    for i in range(len(df)):
+        h = float(df["High"].iloc[i])
+        l = float(df["Low"].iloc[i])
+        v = float(df["Volume"].iloc[i])
+        # distribute volume across price range of this candle
+        candle_bins = max(1, int((h-l)/bin_size))
+        vol_per_bin = v / candle_bins
+        for b in range(candle_bins):
+            price_level = round(l + b*bin_size + bin_size/2, 2)
+            bucket = round((price_level - price_min) / bin_size) * bin_size + price_min
+            bucket = round(bucket, 2)
+            vol_at_price[bucket] = vol_at_price.get(bucket, 0) + vol_per_bin
+
+    if not vol_at_price:
+        return {}
+
+    sorted_levels = sorted(vol_at_price.items(), key=lambda x: -x[1])
+    poc = sorted_levels[0][0]
+    total_vol = sum(vol_at_price.values())
+    target_vol = total_vol * 0.70  # 70% = Value Area
+
+    # Value Area: prices around POC containing 70% of volume
+    accumulated = 0
+    va_prices = []
+    for price_level, vol in sorted_levels:
+        accumulated += vol
+        va_prices.append(price_level)
+        if accumulated >= target_vol:
+            break
+
+    vah = max(va_prices) if va_prices else poc
+    val = min(va_prices) if va_prices else poc
+    current = float(df["Close"].iloc[-1])
+
+    if current > vah:     position = "ABOVE Value Area — Potential rejection"
+    elif current < val:   position = "BELOW Value Area — Potential support"
+    elif abs(current-poc)/poc < 0.005: position = "AT Point of Control — Key level"
+    else:                 position = "INSIDE Value Area — Balanced market"
+
+    return {
+        "poc": round(poc, 2),
+        "vah": round(vah, 2),
+        "val": round(val, 2),
+        "current": round(current, 2),
+        "position": position,
+        "top_levels": [(round(p,2), round(v/1e6,2)) for p,v in sorted_levels[:5]],
+        "total_levels": len(vol_at_price),
+    }
+
+
+# ── 7. OPTIONS DATA: PCR, MAX PAIN ───────────────────────────
+def fetch_options_data(symbol):
+    """Fetch OI, PCR, Max Pain from yfinance."""
+    try:
+        import yfinance as yf2
+        ticker = yf2.Ticker(symbol)
+        exps   = ticker.options
+        if not exps:
+            return {}
+        exp = exps[0]
+        chain = ticker.option_chain(exp)
+        calls = chain.calls
+        puts  = chain.puts
+
+        # Total OI
+        total_call_oi = int(calls["openInterest"].sum()) if "openInterest" in calls.columns else 0
+        total_put_oi  = int(puts["openInterest"].sum())  if "openInterest" in puts.columns  else 0
+        pcr = round(total_put_oi / max(total_call_oi, 1), 2)
+
+        # Max Pain
+        try:
+            strikes = sorted(set(calls["strike"].tolist() + puts["strike"].tolist()))
+            pain_values = []
+            for s in strikes:
+                call_pain = sum(max(0, s - k) * oi for k, oi in zip(
+                    calls["strike"], calls["openInterest"].fillna(0)) if s > k)
+                put_pain  = sum(max(0, k - s) * oi for k, oi in zip(
+                    puts["strike"], puts["openInterest"].fillna(0)) if s < k)
+                pain_values.append((s, call_pain + put_pain))
+            max_pain_strike = min(pain_values, key=lambda x: x[1])[0] if pain_values else 0
+        except Exception:
+            max_pain_strike = 0
+
+        # PCR interpretation
+        if pcr > 1.5:   pcr_signal = "VERY BULLISH (heavy put writing)"
+        elif pcr > 1.2: pcr_signal = "BULLISH"
+        elif pcr > 0.8: pcr_signal = "NEUTRAL"
+        elif pcr > 0.5: pcr_signal = "BEARISH"
+        else:           pcr_signal = "VERY BEARISH (heavy call writing)"
+
+        return {
+            "expiry": exp,
+            "call_oi": total_call_oi,
+            "put_oi":  total_put_oi,
+            "pcr": pcr,
+            "pcr_signal": pcr_signal,
+            "max_pain": max_pain_strike,
+            "top_call_strikes": calls.nlargest(3,"openInterest")[["strike","openInterest"]].values.tolist() if "openInterest" in calls.columns else [],
+            "top_put_strikes":  puts.nlargest(3,"openInterest")[["strike","openInterest"]].values.tolist()  if "openInterest" in puts.columns  else [],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── 8. OPENING RANGE BREAKOUT (ORB) ──────────────────────────
+def compute_orb(df_5m):
+    """Opening Range Breakout — first 15/30 min range."""
+    if df_5m is None or len(df_5m) < 10:
+        return {}
+    try:
+        df_5m = df_5m.copy()
+        df_5m.index = df_5m.index.tz_localize(None) if df_5m.index.tzinfo else df_5m.index
+        today = df_5m.index[-1].date()
+        today_data = df_5m[df_5m.index.date == today]
+        if len(today_data) < 3:
+            return {}
+
+        # 15-min opening range (first 3 candles of 5m)
+        orb_data = today_data.iloc[:3]
+        orb_high = float(orb_data["High"].max())
+        orb_low  = float(orb_data["Low"].min())
+        orb_range= orb_high - orb_low
+        current  = float(df_5m["Close"].iloc[-1])
+
+        if current > orb_high:
+            status = "BULLISH BREAKOUT above ORB"
+            signal = "BUY — Target ORB High + Range extension"
+            color  = "#00b880"
+        elif current < orb_low:
+            status = "BEARISH BREAKDOWN below ORB"
+            signal = "SELL — Target ORB Low - Range extension"
+            color  = "#e74c3c"
+        else:
+            status = "Inside Opening Range — Wait for breakout"
+            signal = "WAIT — No trade until ORB break"
+            color  = "#f39c12"
+
+        target_up   = round(orb_high + orb_range, 2)
+        target_down = round(orb_low  - orb_range, 2)
+
+        return {
+            "orb_high":    round(orb_high, 2),
+            "orb_low":     round(orb_low, 2),
+            "orb_range":   round(orb_range, 2),
+            "current":     round(current, 2),
+            "status":      status,
+            "signal":      signal,
+            "color":       color,
+            "target_up":   target_up,
+            "target_down": target_down,
+            "candles_used": len(orb_data),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── 9. KELLY CRITERION ───────────────────────────────────────
+def kelly_sizing(win_rate, rr_ratio, capital, max_risk_pct=0.20):
+    """Optimal Kelly Criterion position size."""
+    if rr_ratio <= 0 or win_rate <= 0:
+        return 0
+    p = win_rate
+    q = 1 - p
+    b = rr_ratio
+    kelly = (b*p - q) / b
+    kelly = max(0.0, min(kelly, max_risk_pct))
+    half_kelly = kelly * 0.5  # safer
+    return {
+        "full_kelly":  round(kelly*100, 1),
+        "half_kelly":  round(half_kelly*100, 1),
+        "capital_full": round(capital * kelly, 0),
+        "capital_half": round(capital * half_kelly, 0),
+        "expected_value": round(b*p - q, 3),
+        "interpretation": (
+            "TRADE THIS — positive EV" if (b*p - q) > 0
+            else "SKIP — negative expected value"
+        ),
+    }
+
+
 # =============================================================
 # MAIN DASHBOARD
 # =============================================================
@@ -1400,6 +1839,255 @@ padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-siz
 <span style='color:#888;font-family:monospace;'>{ind["value"]}</span>
 <span style='color:{ind["color"]};font-weight:600;'>{ind["sig"]}</span>
 </div>""", unsafe_allow_html=True)
+
+
+
+    # =============================================================
+    # ADVANCED ANALYSIS TABS
+    # =============================================================
+    st.markdown("---")
+    st.markdown("### Advanced Analysis")
+    at1, at2, at3, at4, at5 = st.tabs([
+        "Price Action + SMC",
+        "Volume Profile",
+        "Options Data",
+        "ORB + Session",
+        "Kelly Sizing",
+    ])
+
+    with at1:
+        col_pa, col_smc = st.columns(2)
+
+        with col_pa:
+            st.markdown("#### Market Structure")
+            ms = detect_market_structure(chart_df)
+            if ms and "trend" in ms:
+                tc = ms.get("trend_color","#f39c12")
+                st.markdown(f"""
+<div style='background:#1a1a2e;border:2px solid {tc};border-radius:10px;padding:14px;margin-bottom:10px;'>
+  <div style='font-size:20px;font-weight:700;color:{tc};'>{ms["trend"]}</div>
+  <div style='font-size:12px;color:#aaa;margin-top:6px;'>
+    {"HH" if ms["hh"] else "LH"} + {"HL" if ms["hl"] else "LL"}
+  </div>
+  {"<div style='margin-top:8px;background:#0d2818;border-radius:6px;padding:8px;font-size:12px;color:#00e5a0;'>" + ms["mss"] + "</div>" if ms.get("mss") else ""}
+</div>""", unsafe_allow_html=True)
+
+            st.markdown("#### Demand / Supply Zones")
+            supply_z, demand_z = find_demand_supply_zones(chart_df)
+            if supply_z:
+                for z in reversed(supply_z):
+                    st.markdown(f"<div style='background:#2d0a0a;border-left:3px solid #e74c3c;border-radius:4px;padding:6px 10px;margin-bottom:4px;font-size:12px;color:#e74c3c;'>SUPPLY Rs.{z['bottom']} — Rs.{z['top']} | Strength: {'*'*z['strength']} | {z['date']}</div>", unsafe_allow_html=True)
+            if demand_z:
+                for z in reversed(demand_z):
+                    st.markdown(f"<div style='background:#0d2818;border-left:3px solid #00b880;border-radius:4px;padding:6px 10px;margin-bottom:4px;font-size:12px;color:#00b880;'>DEMAND Rs.{z['bottom']} — Rs.{z['top']} | Strength: {'*'*z['strength']} | {z['date']}</div>", unsafe_allow_html=True)
+
+            st.markdown("#### Fake Breakout Detection")
+            fakes = detect_fake_breakout(chart_df)
+            if fakes:
+                for fb in fakes:
+                    st.markdown(f"<div style='background:#1a0a0a;border:1px solid {fb['color']};border-radius:6px;padding:8px;margin-bottom:6px;font-size:12px;'><b style='color:{fb['color']};'>{fb['type']}</b><br><span style='color:#aaa;'>{fb['desc']}</span><br><b style='color:{fb['color']};'>{fb['signal']}</b></div>", unsafe_allow_html=True)
+            else:
+                st.success("No fake breakouts detected recently")
+
+        with col_smc:
+            st.markdown("#### Order Blocks (Institutional Zones)")
+            obs = find_order_blocks(chart_df)
+            if obs:
+                for ob in reversed(obs[-3:]):
+                    c = ob["color"]
+                    st.markdown(f"""
+<div style='background:{"#0d2818" if c=="#00b880" else "#2d0a0a"};border:1px solid {c};border-radius:8px;padding:10px;margin-bottom:6px;'>
+  <div style='font-size:13px;font-weight:600;color:{c};'>{ob["type"]}</div>
+  <div style='font-size:12px;color:#aaa;'>Zone: Rs.{ob["bottom"]} — Rs.{ob["top"]}</div>
+  <div style='font-size:11px;color:#888;'>{ob["desc"]}</div>
+  <div style='font-size:12px;color:{c};font-weight:600;margin-top:4px;'>{ob["signal"]}</div>
+  <div style='font-size:10px;color:#666;'>{ob["date"]}</div>
+</div>""", unsafe_allow_html=True)
+            else:
+                st.info("No clear Order Blocks found")
+
+            st.markdown("#### Fair Value Gaps (FVG)")
+            fvgs = find_fvg(chart_df)
+            if fvgs:
+                for fvg in fvgs[-3:]:
+                    c = fvg["color"]
+                    st.markdown(f"""
+<div style='background:{"#0d2818" if c=="#00b880" else "#2d0a0a"};border:1px solid {c};border-radius:6px;padding:8px;margin-bottom:6px;font-size:12px;'>
+  <b style='color:{c};'>{fvg["type"]}</b>
+  <span style='color:#888;margin-left:8px;'>Gap: Rs.{fvg["gap"]:.2f}</span><br>
+  <span style='color:#aaa;'>Zone: Rs.{fvg["bottom"]} — Rs.{fvg["top"]}</span><br>
+  <span style='color:{c};'>{fvg["desc"]}</span><br>
+  <span style='font-size:10px;color:#666;'>{fvg["date"]}</span>
+</div>""", unsafe_allow_html=True)
+            else:
+                st.info("No unfilled FVGs found")
+
+    with at2:
+        st.markdown("#### Volume Profile")
+        vp = compute_volume_profile(chart_df)
+        if vp and "poc" in vp:
+            price_now = float(chart_df["Close"].iloc[-1])
+            vc1,vc2,vc3 = st.columns(3)
+            vc1.metric("POC (Point of Control)", f"Rs.{vp['poc']:,.2f}",
+                       f"{'Above' if price_now>vp['poc'] else 'Below'} POC")
+            vc2.metric("Value Area High (VAH)", f"Rs.{vp['vah']:,.2f}")
+            vc3.metric("Value Area Low (VAL)",  f"Rs.{vp['val']:,.2f}")
+
+            pos_color = "#00b880" if "Potential" in vp["position"] or "AT" in vp["position"] else "#f39c12"
+            st.markdown(f"""
+<div style='background:#1a1a2e;border:2px solid {pos_color};border-radius:10px;padding:14px;'>
+  <div style='font-size:15px;font-weight:600;color:{pos_color};'>{vp["position"]}</div>
+  <div style='margin-top:10px;'>
+    <div style='font-size:12px;color:#888;margin-bottom:4px;'>Price vs Value Area:</div>
+    <div style='display:flex;gap:8px;flex-wrap:wrap;font-size:12px;'>
+      <span style='background:#2d0a0a;color:#e74c3c;padding:3px 10px;border-radius:99px;'>VAH Rs.{vp["vah"]}</span>
+      <span style='background:#1a1a2e;color:#a78bfa;padding:3px 10px;border-radius:99px;'>POC Rs.{vp["poc"]}</span>
+      <span style='background:#0d2818;color:#00b880;padding:3px 10px;border-radius:99px;'>VAL Rs.{vp["val"]}</span>
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+            st.markdown("**Highest Volume Price Levels:**")
+            for pl, vol in vp["top_levels"]:
+                is_poc = pl == vp["poc"]
+                st.markdown(f"<div style='display:flex;justify-content:space-between;background:{'#1a2a3d' if is_poc else '#161b22'};border-radius:5px;padding:5px 12px;margin-bottom:3px;font-size:12px;'><span style='color:{'#f39c12' if is_poc else '#ccc'};'>{'POC ' if is_poc else ''}Rs.{pl:,.2f}</span><span style='color:#888;'>{vol:.1f}M vol</span></div>", unsafe_allow_html=True)
+        else:
+            st.info("Not enough data for Volume Profile")
+
+    with at3:
+        st.markdown("#### Options Data (NSE)")
+        sym_clean = stock.replace(".NS","")
+        if st.button(f"Load Options Data for {sym_clean}", type="primary"):
+            with st.spinner("Fetching options chain..."):
+                opt_data = fetch_options_data(stock)
+            if "error" in opt_data:
+                st.warning(f"Options not available: {opt_data['error']}")
+            elif opt_data:
+                oc1,oc2,oc3 = st.columns(3)
+                pcr_color = "#00b880" if opt_data["pcr"]>1 else "#e74c3c"
+                oc1.metric("Total Call OI", f"{opt_data['call_oi']:,}")
+                oc2.metric("Total Put OI",  f"{opt_data['put_oi']:,}")
+                oc3.metric("PCR",           f"{opt_data['pcr']}", opt_data["pcr_signal"])
+
+                st.markdown(f"""
+<div style='background:#1a1a2e;border:2px solid {pcr_color};border-radius:10px;padding:14px;margin:10px 0;'>
+  <div style='font-size:18px;font-weight:700;color:{pcr_color};'>PCR {opt_data["pcr"]} — {opt_data["pcr_signal"]}</div>
+  <div style='font-size:12px;color:#888;margin-top:6px;'>
+    PCR >1.5 = Bullish (more puts = market makers expect UP)<br>
+    PCR 0.5-0.8 = Bearish (more calls = caution)<br>
+    PCR 0.8-1.2 = Neutral
+  </div>
+  {"<div style='margin-top:10px;font-size:14px;'><b style='color:#f39c12;'>Max Pain: Rs." + str(opt_data.get("max_pain","N/A")) + "</b> — Price tends to expire near this level</div>" if opt_data.get("max_pain") else ""}
+</div>""", unsafe_allow_html=True)
+
+                if opt_data.get("top_call_strikes"):
+                    st.markdown("**Highest Call OI (Resistance levels):**")
+                    for strike, oi in opt_data["top_call_strikes"]:
+                        st.markdown(f"<div style='background:#2d0a0a;border-radius:5px;padding:5px 12px;margin-bottom:3px;font-size:12px;color:#e74c3c;'>CALL Rs.{strike:,.0f} — OI: {int(oi):,}</div>", unsafe_allow_html=True)
+                if opt_data.get("top_put_strikes"):
+                    st.markdown("**Highest Put OI (Support levels):**")
+                    for strike, oi in opt_data["top_put_strikes"]:
+                        st.markdown(f"<div style='background:#0d2818;border-radius:5px;padding:5px 12px;margin-bottom:3px;font-size:12px;color:#00b880;'>PUT Rs.{strike:,.0f} — OI: {int(oi):,}</div>", unsafe_allow_html=True)
+        else:
+            st.info("Click button to load live options chain data (requires market hours for best data)")
+
+        st.markdown("---")
+        st.markdown("#### How to use Options Data:")
+        st.markdown("""
+- **PCR > 1.5** — Bullish signal (institutions writing puts = they expect market UP)
+- **PCR < 0.7** — Bearish signal (institutions writing calls = they expect market DOWN)
+- **Max Pain** — Price where maximum options expire worthless — market tends to go here
+- **Highest Call OI strike** = Strong resistance level
+- **Highest Put OI strike** = Strong support level
+""")
+
+    with at4:
+        st.markdown("#### Opening Range Breakout (ORB)")
+        orb = compute_orb(df)
+        if orb and "error" not in orb and "orb_high" in orb:
+            oc = orb["color"]
+            st.markdown(f"""
+<div style='background:#1a1a2e;border:2px solid {oc};border-radius:12px;padding:16px;'>
+  <div style='font-size:18px;font-weight:700;color:{oc};'>{orb["status"]}</div>
+  <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:12px 0;text-align:center;'>
+    <div style='background:#0d2818;border-radius:8px;padding:8px;'>
+      <div style='font-size:10px;color:#888;'>ORB High</div>
+      <div style='font-size:16px;font-weight:600;color:#e74c3c;'>Rs.{orb["orb_high"]}</div>
+    </div>
+    <div style='background:#1a1a2e;border-radius:8px;padding:8px;'>
+      <div style='font-size:10px;color:#888;'>ORB Range</div>
+      <div style='font-size:16px;font-weight:600;color:#f39c12;'>Rs.{orb["orb_range"]:.2f}</div>
+    </div>
+    <div style='background:#0d2818;border-radius:8px;padding:8px;'>
+      <div style='font-size:10px;color:#888;'>ORB Low</div>
+      <div style='font-size:16px;font-weight:600;color:#00b880;'>Rs.{orb["orb_low"]}</div>
+    </div>
+  </div>
+  <div style='font-size:13px;color:{oc};font-weight:600;'>{orb["signal"]}</div>
+  <div style='font-size:12px;color:#888;margin-top:6px;'>
+    Target UP: Rs.{orb["target_up"]} | Target DOWN: Rs.{orb["target_down"]}
+  </div>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.info("ORB needs intraday data. Switch to Intraday mode during market hours (9:15–10:00 AM).")
+
+        st.markdown("#### Indian Market Session Guide")
+        now_t = datetime.datetime.now().time()
+        sessions = [
+            ("9:15 – 9:30",  "Market Open",       "Very volatile, avoid if not experienced", "#f39c12"),
+            ("9:30 – 10:30", "Momentum Session",  "Best time — strong trends, high volume", "#00b880"),
+            ("10:30 – 12:30","Mid Morning",        "Moderate activity, trend continuation", "#4e8fff"),
+            ("12:30 – 2:00", "Lunch Lull",         "Low volume, choppy — avoid intraday", "#888888"),
+            ("2:00 – 3:15",  "Power Hour",         "Strong moves, reversals common", "#a78bfa"),
+            ("3:15 – 3:30",  "Closing Session",    "Square off only — no new entries", "#e74c3c"),
+        ]
+        for time_r, name, desc, color in sessions:
+            st.markdown(f"""<div style='display:flex;gap:10px;align-items:center;background:#1a1a2e;
+border-left:3px solid {color};border-radius:5px;padding:8px 12px;margin-bottom:5px;'>
+<div style='min-width:100px;font-family:monospace;font-size:11px;color:{color};'>{time_r}</div>
+<div><b style='color:#ccc;font-size:12px;'>{name}</b>
+<div style='font-size:11px;color:#888;'>{desc}</div></div>
+</div>""", unsafe_allow_html=True)
+
+    with at5:
+        st.markdown("#### Kelly Criterion — Optimal Position Size")
+        kc1,kc2,kc3 = st.columns(3)
+        k_wr  = kc1.slider("Your Win Rate %", 30, 80, 55) / 100
+        k_rr  = kc2.number_input("Risk:Reward Ratio", 0.5, 5.0, 2.0, 0.1)
+        k_cap = kc3.number_input("Capital (Rs.)", 10000, 10000000, 500000, step=10000)
+
+        kelly = kelly_sizing(k_wr, k_rr, k_cap)
+        if kelly:
+            ev_color = "#00b880" if kelly["expected_value"] > 0 else "#e74c3c"
+            kk1,kk2,kk3 = st.columns(3)
+            kk1.metric("Full Kelly %",  f"{kelly['full_kelly']}%",  f"Rs.{kelly['capital_full']:,.0f}")
+            kk2.metric("Half Kelly %",  f"{kelly['half_kelly']}%",  f"Rs.{kelly['capital_half']:,.0f} (Recommended)")
+            kk3.metric("Expected Value",f"{kelly['expected_value']}", kelly["interpretation"])
+
+            st.markdown(f"""
+<div style='background:#1a1a2e;border:2px solid {ev_color};border-radius:10px;padding:14px;margin:10px 0;'>
+  <div style='font-size:16px;font-weight:700;color:{ev_color};'>{kelly["interpretation"]}</div>
+  <div style='font-size:12px;color:#aaa;margin-top:8px;'>
+    With {int(k_wr*100)}% win rate and {k_rr}:1 R:R —<br>
+    Use <b>Half Kelly</b> for safer bet: Rs.{kelly['capital_half']:,.0f} per trade<br>
+    Even with 40% win rate, 2:1 R:R is profitable!
+  </div>
+</div>""", unsafe_allow_html=True)
+
+            st.markdown("**Win Rate vs R:R Profitability Table:**")
+            import pandas as pd
+            wr_vals = [35, 40, 45, 50, 55, 60]
+            rr_vals = [1.0, 1.5, 2.0, 3.0]
+            table_data = {}
+            for rr in rr_vals:
+                col_vals = []
+                for wr in wr_vals:
+                    ev = rr*(wr/100) - (1-wr/100)
+                    col_vals.append(f"{'+':.0f}{ev:.2f}" if ev>0 else f"{ev:.2f}")
+                table_data[f"R:R {rr}"] = col_vals
+            df_table = pd.DataFrame(table_data, index=[f"{w}% WR" for w in wr_vals])
+            st.dataframe(df_table, use_container_width=True)
+            st.caption("+ = profitable | - = losing | Values = Expected value per rupee risked")
 
 
 # =============================================================
