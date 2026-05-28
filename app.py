@@ -1372,35 +1372,268 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     else:
         ai_prob = 0.5
 
-    # ── SIGNAL + COMBINED SCORE ───────────────────────────────
+    # ── MASTER SIGNAL ENGINE ─────────────────────────────────
     st.markdown("---")
-    c_trend = last["Close"] > last["EMA20"] > last["EMA50"]
-    c_rsi   = 45 < last["RSI"] < 68
-    c_macd  = last["MACD"] > last["MACD_Signal"]
-    c_vol   = last["Vol_Ratio"] > 1.1
-    c_ai    = ai_prob > 0.55
-    rsi_ob  = last["RSI"] > 75
-    rsi_os  = last["RSI"] < 30
-    score   = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
-    tech_score = sum([c_trend, c_rsi, c_macd, c_vol])
-    tech_pct   = round((tech_score / 4) * 100)
-    ai_pct     = round(ai_prob * 100)
-    combined   = round(tech_pct * 0.5 + ai_pct * 0.5)
 
-    if force_trade:        direction = "STRONG BUY"
-    elif rsi_ob:           direction = "WAIT"
-    elif combined >= 80:   direction = "STRONG BUY"
-    elif combined >= 62 and tech_score >= 3 and ai_pct >= 40: direction = "BUY"
-    elif combined <= 35:   direction = "SELL"
-    elif combined <= 45 and tech_score <= 1: direction = "SELL"
-    else:                  direction = "WAIT"
+    # LAYER 1: Technical (30%)
+    c_trend  = last["Close"] > last["EMA20"] > last["EMA50"]
+    c_ema9   = last["Close"] > last.get("EMA9", last["Close"])
+    c_rsi    = 45 < last["RSI"] < 68
+    c_macd   = last["MACD"] > last["MACD_Signal"]
+    c_macd_h = float(last.get("MACD_Hist", 0)) > 0
+    c_vol    = float(last["Vol_Ratio"]) > 1.1
+    c_bb     = last["Close"] > float(last.get("BB_Mid", last["Close"]))
+    c_stoch  = float(last.get("Stoch_K", 50)) < 70
+    rsi_ob   = float(last["RSI"]) > 75
+    rsi_os   = float(last["RSI"]) < 30
+    tech_checks = {
+        "Trend: Price > EMA20 > EMA50": c_trend,
+        "Price above EMA9":             c_ema9,
+        "RSI in zone (45-68)":          c_rsi,
+        "MACD above Signal line":       c_macd,
+        "MACD Histogram positive":      c_macd_h,
+        "Volume surge (>1.1x)":         c_vol,
+        "Price above BB Midline":       c_bb,
+        "Stochastic not overbought":    c_stoch,
+    }
+    tech_score = sum(tech_checks.values())
+    tech_pct   = round(tech_score / len(tech_checks) * 100)
 
-    signal = direction in ["BUY", "STRONG BUY"]
+    # LAYER 2: AI (25%)
+    ai_pct = round(ai_prob * 100)
+    c_ai   = ai_prob > 0.55
+    score  = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
 
-    if combined >= 80:   meter_color="#00b880"; meter_bg="#003d2a"; meter_label="STRONG BUY ✅"
-    elif combined >= 62: meter_color="#27ae60"; meter_bg="#1a3d20"; meter_label="BUY"
-    elif combined >= 45: meter_color="#f39c12"; meter_bg="#3d2a00"; meter_label="WAIT"
-    else:                meter_color="#e74c3c"; meter_bg="#3d0a0a"; meter_label="SELL"
+    # LAYER 3: Candlestick (15%)
+    candle_pct = 50; candle_top = "None"
+    try:
+        _cd = df.dropna(subset=["Close","EMA20"]).tail(50).copy()
+        _cd.index = pd.to_datetime(_cd.index)
+        if "ATR" not in _cd.columns:
+            _cd["ATR"] = (_cd["High"]-_cd["Low"]).rolling(14).mean()
+        _pts = detect_candlestick_patterns(_cd)
+        if _pts:
+            _tp = sorted(_pts, key=lambda x: -x["strength"])[0]
+            candle_top = _tp["pattern"]
+            if _tp["type"]=="bullish":   candle_pct = min(100, 50+_tp["strength"]*10)
+            elif _tp["type"]=="bearish": candle_pct = max(0,   50-_tp["strength"]*10)
+    except Exception:
+        pass
+
+    # LAYER 4: Market Structure (15%)
+    struct_pct = 50; struct_label = "Unknown"
+    try:
+        _sd = df.tail(60).copy()
+        if "ATR" not in _sd.columns:
+            _sd["ATR"] = (_sd["High"]-_sd["Low"]).rolling(14).mean()
+        _ms = detect_market_structure(_sd)
+        if _ms and "hh" in _ms:
+            if   _ms["hh"] and _ms["hl"]: struct_pct=85; struct_label="Uptrend HH+HL"
+            elif _ms["lh"] and _ms["ll"]: struct_pct=20; struct_label="Downtrend LH+LL"
+            else:                          struct_pct=50; struct_label=_ms.get("trend","Ranging")[:18]
+            if _ms.get("mss") and "BULLISH" in _ms.get("mss",""):
+                struct_pct = min(100, struct_pct+15)
+    except Exception:
+        pass
+
+    # LAYER 5: SMC — Order Block + FVG (10%)
+    smc_pct=50; smc_label="No clear OB/FVG"
+    try:
+        _ob_df = df.tail(80).copy()
+        if "ATR" not in _ob_df.columns:
+            _ob_df["ATR"] = (_ob_df["High"]-_ob_df["Low"]).rolling(14).mean()
+        _obs  = find_order_blocks(_ob_df)
+        _fvgs = find_fvg(_ob_df)
+        _b_ob = [o for o in _obs if o["type"]=="Bullish Order Block"]
+        _b_fvg= [f for f in _fvgs if f["type"]=="Bullish FVG"]
+        if _b_ob and price < _b_ob[-1]["top"]*1.02:
+            smc_pct=80; smc_label="Near Bullish OB"
+        elif _b_fvg:
+            smc_pct=70; smc_label="Bullish FVG"
+    except Exception:
+        pass
+
+    # LAYER 6: Volume (5%)
+    _vr = float(last.get("Vol_Ratio",1))
+    if _vr>2.0:   vol_pct=90; vol_label="Very High Vol"
+    elif _vr>1.5: vol_pct=75; vol_label="Above Avg Vol"
+    elif _vr>1.0: vol_pct=55; vol_label="Normal Vol"
+    else:         vol_pct=30; vol_label="Low Vol"
+
+    # MASTER WEIGHTED SCORE
+    master = round(
+        tech_pct   * 0.30 +
+        ai_pct     * 0.25 +
+        candle_pct * 0.15 +
+        struct_pct * 0.15 +
+        smc_pct    * 0.10 +
+        vol_pct    * 0.05
+    )
+
+    # RISK PENALTIES
+    _risks=[]; _pen=0
+    if rsi_ob:
+        _pen+=15; _risks.append(("RSI Overbought","Pull back expected","#e74c3c"))
+    if _vr<0.7:
+        _pen+=10; _risks.append(("Low Volume","Weak signal — skip","#f39c12"))
+    if float(last.get("MACD_Hist",0))<0 and float(last.get("MACD",0))>float(last.get("MACD_Signal",0)):
+        _pen+=5;  _risks.append(("MACD Divergence","Momentum weakening","#f39c12"))
+    try:
+        _sz,_ = find_demand_supply_zones(df.tail(80))
+        for _z in _sz:
+            if abs(price-_z["top"])/price < 0.01:
+                _pen+=10; _risks.append(("Near Supply Zone",f"Resistance Rs.{_z['top']}","#e74c3c"))
+    except Exception:
+        pass
+    master = max(0, master - _pen)
+
+    # FINAL VERDICT
+    if force_trade:          direction="TRADE";       v_color="#00b880"; v_bg="#003d2a"
+    elif rsi_ob and master<70:direction="NO TRADE";   v_color="#e74c3c"; v_bg="#2d0a0a"
+    elif master>=78:          direction="STRONG BUY"; v_color="#00b880"; v_bg="#003d2a"
+    elif master>=65:          direction="BUY";        v_color="#27ae60"; v_bg="#0a1f10"
+    elif master>=50:          direction="WAIT";       v_color="#f39c12"; v_bg="#1a1200"
+    elif master>=35:          direction="AVOID";      v_color="#e07b39"; v_bg="#2d1800"
+    else:                     direction="NO TRADE";   v_color="#e74c3c"; v_bg="#2d0a0a"
+
+    signal    = direction in ["STRONG BUY","BUY","TRADE"]
+    combined  = master  # keep for compatibility
+
+    # TRADE PLAN CALC
+    atr_now      = float(last["ATR"])
+    _sl_d        = atr_now * mcfg.get("sl_mult",1.5)
+    _tg_d        = _sl_d   * mcfg.get("rr",2.0)
+    stop_loss_m  = round(price - _sl_d, 2)
+    target_m     = round(price + _tg_d, 2)
+    qty_m        = max(1, int((capital*(risk/100)) / _sl_d))
+    max_loss_rs  = round(_sl_d * qty_m, 2)
+    max_gain_rs  = round(_tg_d * qty_m, 2)
+    win_prob     = min(82, round(master*0.7+15))
+    _rr_m        = round(_tg_d/_sl_d, 1)
+
+    # RISK WARNINGS HTML
+    _risk_html = "".join([
+        "<div style='background:rgba(231,76,60,0.1);border-left:3px solid " + r[2] + ";border-radius:5px;"
+        "padding:6px 12px;margin-top:6px;font-size:12px;'>"
+        "<span style=\'color:" + r[2] + ";font-weight:600;\'>Warning: " + r[0] + "</span> — " + r[1] + "</div>"
+        for r in _risks
+    ]) if _risks else (
+        "<div style='background:rgba(0,184,128,0.08);border-left:3px solid #00b880;"
+        "border-radius:5px;padding:6px 12px;margin-top:6px;font-size:12px;color:#00b880;'>"
+        "No major risk factors detected</div>"
+    )
+
+    st.markdown(f"""
+<div style='background:{v_bg};border:3px solid {v_color};border-radius:16px;padding:22px 26px;margin-bottom:16px;'>
+
+  <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;'>
+    <div>
+      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;'>
+        MASTER SIGNAL — {stock.replace(".NS","")} {selected_mode}
+      </div>
+      <div style='font-size:40px;font-weight:800;color:{v_color};line-height:1;'>{direction}</div>
+      <div style='font-size:12px;color:#aaa;margin-top:4px;'>
+        6-layer analysis: Technical + AI + Candles + Structure + SMC + Volume
+      </div>
+    </div>
+    <div style='text-align:right;'>
+      <div style='font-size:52px;font-weight:800;color:{v_color};line-height:1;'>{master}%</div>
+      <div style='font-size:12px;color:#888;'>Overall Confidence</div>
+    </div>
+  </div>
+
+  <div style='background:rgba(255,255,255,0.08);border-radius:99px;height:18px;margin-bottom:6px;position:relative;'>
+    <div style='width:{master}%;background:linear-gradient(90deg,{v_color}88,{v_color});
+    border-radius:99px;height:18px;box-shadow:0 0 14px {v_color}55;'></div>
+    <div style='position:absolute;left:35%;top:-6px;width:2px;height:30px;background:#e07b39;opacity:0.5;'></div>
+    <div style='position:absolute;left:50%;top:-6px;width:2px;height:30px;background:#f39c12;opacity:0.5;'></div>
+    <div style='position:absolute;left:65%;top:-6px;width:2px;height:30px;background:#27ae60;opacity:0.5;'></div>
+    <div style='position:absolute;left:78%;top:-6px;width:2px;height:30px;background:#00b880;opacity:0.7;'></div>
+  </div>
+  <div style='display:flex;justify-content:space-between;font-size:10px;color:#555;margin-bottom:16px;'>
+    <span>0 NO TRADE</span>
+    <span style='color:#e07b39;'>35 AVOID</span>
+    <span style='color:#f39c12;'>50 WAIT</span>
+    <span style='color:#27ae60;'>65 BUY</span>
+    <span style='color:#00b880;'>78 STRONG</span>
+    <span>100</span>
+  </div>
+
+  <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;'>
+    {"".join([
+      "<div style='background:rgba(0,0,0,0.35);border-radius:8px;padding:10px;text-align:center;border:1px solid " +
+      ("#00b880" if v>=65 else ("#f39c12" if v>=45 else "#e74c3c")) + "33;'>" +
+      "<div style='font-size:10px;color:#888;margin-bottom:3px;'>" + lbl + "</div>" +
+      "<div style='font-size:22px;font-weight:700;color:" +
+      ("#00b880" if v>=65 else ("#f39c12" if v>=45 else "#e74c3c")) + ";'>" + str(v) + "%</div>" +
+      "<div style='font-size:10px;color:#666;'>" + sub + "</div></div>"
+      for lbl,v,sub in [
+        ("Technical 30%",  tech_pct,    str(tech_score)+"/8 checks"),
+        ("AI Model 25%",   ai_pct,      "Bullish" if ai_pct>=60 else ("Neutral" if ai_pct>=40 else "Bearish")),
+        ("Candlestick 15%",candle_pct,  candle_top[:14]),
+        ("Structure 15%",  struct_pct,  struct_label[:17]),
+        ("SMC 10%",        smc_pct,     smc_label[:15]),
+        ("Volume 5%",      vol_pct,     vol_label[:14]),
+      ]
+    ])}
+  </div>
+
+  <div style='background:rgba(0,0,0,0.3);border-radius:10px;padding:12px 16px;margin-bottom:10px;'>
+    <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>Trade Plan</div>
+    <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center;'>
+      <div><div style='font-size:10px;color:#888;'>Entry</div><div style='font-size:14px;font-weight:600;color:#e6edf3;'>Rs.{price:.2f}</div></div>
+      <div><div style='font-size:10px;color:#e74c3c;'>Stop Loss</div><div style='font-size:14px;font-weight:600;color:#e74c3c;'>Rs.{stop_loss_m}</div></div>
+      <div><div style='font-size:10px;color:#00b880;'>Target</div><div style='font-size:14px;font-weight:600;color:#00b880;'>Rs.{target_m}</div></div>
+      <div><div style='font-size:10px;color:#f39c12;'>R:R</div><div style='font-size:14px;font-weight:600;color:#f39c12;'>{_rr_m}:1</div></div>
+      <div><div style='font-size:10px;color:#a78bfa;'>Qty</div><div style='font-size:14px;font-weight:600;color:#a78bfa;'>{qty_m} sh</div></div>
+    </div>
+  </div>
+
+  <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;'>
+    <div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);border-radius:8px;padding:10px;text-align:center;'>
+      <div style='font-size:10px;color:#888;'>Win Probability</div>
+      <div style='font-size:24px;font-weight:700;color:#00b880;'>{win_prob}%</div>
+      <div style='font-size:10px;color:#666;'>Score-based estimate</div>
+    </div>
+    <div style='background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.25);border-radius:8px;padding:10px;text-align:center;'>
+      <div style='font-size:10px;color:#888;'>Max Loss if SL hits</div>
+      <div style='font-size:24px;font-weight:700;color:#e74c3c;'>Rs.{max_loss_rs:,.0f}</div>
+      <div style='font-size:10px;color:#666;'>SL at Rs.{stop_loss_m}</div>
+    </div>
+    <div style='background:rgba(0,184,128,0.1);border:1px solid rgba(0,184,128,0.25);border-radius:8px;padding:10px;text-align:center;'>
+      <div style='font-size:10px;color:#888;'>Max Gain if Target hits</div>
+      <div style='font-size:24px;font-weight:700;color:#00b880;'>Rs.{max_gain_rs:,.0f}</div>
+      <div style='font-size:10px;color:#666;'>Target Rs.{target_m}</div>
+    </div>
+  </div>
+
+  {_risk_html}
+
+  <div style='margin-top:10px;font-size:10px;color:#555;text-align:center;'>
+    Penalty: -{_pen}pts applied | Score = Tech30%+AI25%+Candle15%+Structure15%+SMC10%+Vol5%
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    if signal and ALERT_ON_SIGNAL:
+        fire_alert(f"{direction} [{selected_mode}]", stock, price,
+                   qty_m, stop_loss_m, target_m, master, mode)
+
+    col_sig, col_pos = st.columns(2)
+    with col_sig:
+        st.markdown("#### Detailed Layer Checks")
+        all_checks_display = {
+            **tech_checks,
+            f"AI Model ({ai_pct}%)": c_ai,
+            "Market Structure Bullish": struct_pct >= 65,
+            "Candle Pattern Bullish":   candle_pct >= 65,
+            "Volume Confirmation":      vol_pct >= 55,
+            "SMC / OB Zone":            smc_pct >= 65,
+        }
+        chk_df = pd.DataFrame([
+            {"Check": k, "Pass": "✅" if v else "❌"}
+            for k, v in all_checks_display.items()
+        ])
+        st.dataframe(chk_df, hide_index=True, height=380)
 
     st.markdown(f"""
 <div style="background:{meter_bg};border:2px solid {meter_color};border-radius:12px;padding:16px 20px;margin-bottom:14px;">
