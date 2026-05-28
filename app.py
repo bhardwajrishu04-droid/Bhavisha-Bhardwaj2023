@@ -1998,7 +1998,7 @@ Unrealised: <b style="color:{color}">₹{open_pnl:+.2f}</b>
 </div>""", unsafe_allow_html=True)
 
             with st.expander("Pattern Guide — All 25 patterns explained"):
-                st.markdown("""
+                st.markdown(f"""
 **Bullish Patterns (BUY signals):**
 - **Hammer** — Long lower wick, buyers rejected lower prices
 - **Bullish Engulfing** — Green candle completely covers previous red candle
@@ -2226,7 +2226,7 @@ padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-siz
 
         st.markdown("---")
         st.markdown("#### How to use Options Data:")
-        st.markdown("""
+        st.markdown(f"""
 - **PCR > 1.5** — Bullish signal (institutions writing puts = they expect market UP)
 - **PCR < 0.7** — Bearish signal (institutions writing calls = they expect market DOWN)
 - **Max Pain** — Price where maximum options expire worthless — market tends to go here
