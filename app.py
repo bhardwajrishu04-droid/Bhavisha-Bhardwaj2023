@@ -2083,7 +2083,7 @@ border-left:3px solid {color};border-radius:5px;padding:8px 12px;margin-bottom:5
                 col_vals = []
                 for wr in wr_vals:
                     ev = rr*(wr/100) - (1-wr/100)
-                    col_vals.append(f"{'+':.0f}{ev:.2f}" if ev>0 else f"{ev:.2f}")
+                    col_vals.append(f"+{ev:.2f}" if ev>0 else f"{ev:.2f}")
                 table_data[f"R:R {rr}"] = col_vals
             df_table = pd.DataFrame(table_data, index=[f"{w}% WR" for w in wr_vals])
             st.dataframe(df_table, use_container_width=True)
