@@ -557,6 +557,182 @@ def compute_indicators(df):
     df["Vol_Ratio"]   = df["Volume"] / (df["Volume"].rolling(20).mean() + 1e-9)
     return df
 
+
+# =============================================================
+# CANDLESTICK PATTERN DETECTION ENGINE (25+ Patterns)
+# =============================================================
+def detect_candlestick_patterns(df):
+    df = df.copy().dropna()
+    if len(df) < 5:
+        return []
+    patterns_found = []
+    for i in range(2, len(df)):
+        o  = float(df["Open"].iloc[i])
+        h  = float(df["High"].iloc[i])
+        l  = float(df["Low"].iloc[i])
+        c  = float(df["Close"].iloc[i])
+        o1 = float(df["Open"].iloc[i-1])
+        h1 = float(df["High"].iloc[i-1])
+        l1 = float(df["Low"].iloc[i-1])
+        c1 = float(df["Close"].iloc[i-1])
+        o2 = float(df["Open"].iloc[i-2])
+        c2 = float(df["Close"].iloc[i-2])
+        body  = abs(c - o)
+        body1 = abs(c1 - o1)
+        rng   = h - l + 1e-9
+        upper_shadow  = h - max(o, c)
+        lower_shadow  = min(o, c) - l
+        upper_shadow1 = h1 - max(o1, c1)
+        lower_shadow1 = min(o1, c1) - l1
+        atr = float(df["ATR"].iloc[i]) if "ATR" in df.columns else rng
+        date = str(df.index[i])[:10]
+
+        # SINGLE candle
+        if body < atr * 0.1 and rng > atr * 0.5:
+            patterns_found.append({"pattern":"Doji","type":"neutral","candles":1,"strength":2,
+                "desc":"Indecision — market at crossroads","date":date,"signal":"NEUTRAL","idx":i})
+        if body < atr*0.05 and upper_shadow > atr*0.6 and lower_shadow < atr*0.05:
+            patterns_found.append({"pattern":"Gravestone Doji","type":"bearish","candles":1,"strength":3,
+                "desc":"Bearish reversal at top — bulls tried but failed","date":date,"signal":"SELL","idx":i})
+        if body < atr*0.05 and lower_shadow > atr*0.6 and upper_shadow < atr*0.05:
+            patterns_found.append({"pattern":"Dragonfly Doji","type":"bullish","candles":1,"strength":3,
+                "desc":"Bullish reversal at bottom — bears tried but failed","date":date,"signal":"BUY","idx":i})
+        if lower_shadow > 2*body and upper_shadow < body*0.5 and c > o and body > atr*0.1:
+            patterns_found.append({"pattern":"Hammer","type":"bullish","candles":1,"strength":4,
+                "desc":"Bullish reversal — buyers rejected lower prices","date":date,"signal":"BUY","idx":i})
+        if upper_shadow > 2*body and lower_shadow < body*0.3 and c < o and body > atr*0.1:
+            patterns_found.append({"pattern":"Shooting Star","type":"bearish","candles":1,"strength":4,
+                "desc":"Bearish reversal — sellers rejected higher prices","date":date,"signal":"SELL","idx":i})
+        if upper_shadow > 2*body and lower_shadow < body*0.5 and body > atr*0.1:
+            patterns_found.append({"pattern":"Inverted Hammer","type":"bullish","candles":1,"strength":3,
+                "desc":"Possible bullish reversal — buyers pushing up","date":date,"signal":"WATCH BUY","idx":i})
+        if lower_shadow > 2*body and upper_shadow < body*0.3 and c < o and body > atr*0.1:
+            patterns_found.append({"pattern":"Hanging Man","type":"bearish","candles":1,"strength":3,
+                "desc":"Bearish warning after uptrend","date":date,"signal":"WATCH SELL","idx":i})
+        if c > o and body > atr*0.8 and upper_shadow < body*0.05 and lower_shadow < body*0.05:
+            patterns_found.append({"pattern":"Bullish Marubozu","type":"bullish","candles":1,"strength":5,
+                "desc":"Buyers fully in control — strong momentum","date":date,"signal":"STRONG BUY","idx":i})
+        if c < o and body > atr*0.8 and upper_shadow < body*0.05 and lower_shadow < body*0.05:
+            patterns_found.append({"pattern":"Bearish Marubozu","type":"bearish","candles":1,"strength":5,
+                "desc":"Sellers fully in control — strong momentum","date":date,"signal":"STRONG SELL","idx":i})
+        if body < atr*0.2 and upper_shadow > body*1.5 and lower_shadow > body*1.5:
+            patterns_found.append({"pattern":"Spinning Top","type":"neutral","candles":1,"strength":2,
+                "desc":"Indecision — neither bulls nor bears dominate","date":date,"signal":"WAIT","idx":i})
+
+        # DOUBLE candle
+        if c1 < o1 and c > o and c > o1 and o < c1 and body > body1 * 0.9:
+            patterns_found.append({"pattern":"Bullish Engulfing","type":"bullish","candles":2,"strength":5,
+                "desc":"Strong reversal — bulls completely overwhelm bears","date":date,"signal":"STRONG BUY","idx":i})
+        if c1 > o1 and c < o and c < o1 and o > c1 and body > body1 * 0.9:
+            patterns_found.append({"pattern":"Bearish Engulfing","type":"bearish","candles":2,"strength":5,
+                "desc":"Strong reversal — bears completely overwhelm bulls","date":date,"signal":"STRONG SELL","idx":i})
+        if c1 < o1 and c > o and c < o1 and o > c1:
+            patterns_found.append({"pattern":"Bullish Harami","type":"bullish","candles":2,"strength":3,
+                "desc":"Bearish momentum slowing — possible reversal","date":date,"signal":"WATCH BUY","idx":i})
+        if c1 > o1 and c < o and c > o1 and o < c1:
+            patterns_found.append({"pattern":"Bearish Harami","type":"bearish","candles":2,"strength":3,
+                "desc":"Bullish momentum slowing — possible reversal","date":date,"signal":"WATCH SELL","idx":i})
+        if c1 < o1 and c > o and o < l1 and c > (o1+c1)/2 and c < o1:
+            patterns_found.append({"pattern":"Piercing Line","type":"bullish","candles":2,"strength":4,
+                "desc":"Buyers push above midpoint of bearish candle","date":date,"signal":"BUY","idx":i})
+        if c1 > o1 and c < o and o > h1 and c < (o1+c1)/2 and c > c1:
+            patterns_found.append({"pattern":"Dark Cloud Cover","type":"bearish","candles":2,"strength":4,
+                "desc":"Sellers push below midpoint of bullish candle","date":date,"signal":"SELL","idx":i})
+        if c1 < o1 and c > o and abs(l - l1) < atr*0.05:
+            patterns_found.append({"pattern":"Tweezer Bottom","type":"bullish","candles":2,"strength":3,
+                "desc":"Support confirmed — same lows twice","date":date,"signal":"BUY","idx":i})
+        if c1 > o1 and c < o and abs(h - h1) < atr*0.05:
+            patterns_found.append({"pattern":"Tweezer Top","type":"bearish","candles":2,"strength":3,
+                "desc":"Resistance confirmed — same highs twice","date":date,"signal":"SELL","idx":i})
+
+        # TRIPLE candle
+        if (c2 < o2 and abs(c1-o1) < body*0.3 and c > o and c > (o2+c2)/2):
+            patterns_found.append({"pattern":"Morning Star","type":"bullish","candles":3,"strength":5,
+                "desc":"Powerful bullish reversal — 3-candle bottom","date":date,"signal":"STRONG BUY","idx":i})
+        if (c2 > o2 and abs(c1-o1) < body*0.3 and c < o and c < (o2+c2)/2):
+            patterns_found.append({"pattern":"Evening Star","type":"bearish","candles":3,"strength":5,
+                "desc":"Powerful bearish reversal — 3-candle top","date":date,"signal":"STRONG SELL","idx":i})
+        if (c > o and c1 > o1 and c2 > o2 and c > c1 > c2 and o > o1 > o2 and body > atr*0.3):
+            patterns_found.append({"pattern":"Three White Soldiers","type":"bullish","candles":3,"strength":5,
+                "desc":"3 consecutive green candles — very strong uptrend","date":date,"signal":"STRONG BUY","idx":i})
+        if (c < o and c1 < o1 and c2 < o2 and c < c1 < c2 and o < o1 < o2 and body > atr*0.3):
+            patterns_found.append({"pattern":"Three Black Crows","type":"bearish","candles":3,"strength":5,
+                "desc":"3 consecutive red candles — very strong downtrend","date":date,"signal":"STRONG SELL","idx":i})
+        if (c2 < o2 and c1 > o1 and o1 > c2 and c1 < o2 and c > o and c > o2):
+            patterns_found.append({"pattern":"Three Inside Up","type":"bullish","candles":3,"strength":4,
+                "desc":"Bullish reversal confirmed on 3rd candle","date":date,"signal":"BUY","idx":i})
+        if (c2 > o2 and c1 < o1 and o1 < c2 and c1 > o2 and c < o and c < o2):
+            patterns_found.append({"pattern":"Three Inside Down","type":"bearish","candles":3,"strength":4,
+                "desc":"Bearish reversal confirmed on 3rd candle","date":date,"signal":"SELL","idx":i})
+
+    seen = set()
+    unique = []
+    for p in reversed(patterns_found):
+        if p["pattern"] not in seen:
+            seen.add(p["pattern"])
+            unique.append(p)
+    return unique[:15]
+
+
+# =============================================================
+# TECHNICAL ANALYSIS SUMMARY
+# =============================================================
+def get_ta_summary(df):
+    if df is None or len(df) < 20:
+        return {}
+    last = df.iloc[-1]
+    price = float(last["Close"])
+    rsi   = float(last.get("RSI", 50))
+    macd  = float(last.get("MACD", 0))
+    macd_s= float(last.get("MACD_Signal", 0))
+    stoch = float(last.get("Stoch_K", 50))
+    bb_u  = float(last.get("BB_Upper", price*1.02))
+    bb_l  = float(last.get("BB_Lower", price*0.98))
+    bb_m  = float(last.get("BB_Mid",   price))
+    bb_pos= (price-bb_l)/(bb_u-bb_l+1e-9)*100
+    vol_r = float(last.get("Vol_Ratio", 1))
+    ema9  = float(last.get("EMA9",  price))
+    ema20 = float(last.get("EMA20", price))
+    ema50 = float(last.get("EMA50", price))
+    ema200= float(last.get("EMA200", price)) if "EMA200" in df.columns else ema50
+
+    def sig(cond_buy, cond_sell):
+        if cond_buy:   return "BUY",  "#00b880"
+        if cond_sell:  return "SELL", "#e74c3c"
+        return "NEUTRAL", "#f39c12"
+
+    oscillators = [
+        {"name":"RSI (14)",       "value":f"{rsi:.1f}",     **dict(zip(["sig","color"], sig(rsi>55 and rsi<70, rsi<40 or rsi>78)))},
+        {"name":"MACD",           "value":f"{macd:.2f}",    **dict(zip(["sig","color"], sig(macd>macd_s, macd<macd_s)))},
+        {"name":"Stochastic %K",  "value":f"{stoch:.1f}",   **dict(zip(["sig","color"], sig(stoch<30, stoch>70)))},
+        {"name":"BB Position",    "value":f"{bb_pos:.0f}%", **dict(zip(["sig","color"], sig(bb_pos<30, bb_pos>80)))},
+        {"name":"Volume Ratio",   "value":f"{vol_r:.2f}x",  **dict(zip(["sig","color"], sig(vol_r>1.3, vol_r<0.7)))},
+        {"name":"MACD Histogram", "value":f"{float(last.get('MACD_Hist',0)):+.3f}",
+         **dict(zip(["sig","color"], sig(float(last.get("MACD_Hist",0))>0 and float(last.get("MACD_Hist",0))>float(df["MACD_Hist"].iloc[-2]) if len(df)>1 else True,
+                                       float(last.get("MACD_Hist",0))<0)))},
+    ]
+    moving_avgs = [
+        {"name":"EMA 9",   "value":f"Rs.{ema9:,.2f}",   **dict(zip(["sig","color"], sig(price>ema9,   price<ema9)))},
+        {"name":"EMA 20",  "value":f"Rs.{ema20:,.2f}",  **dict(zip(["sig","color"], sig(price>ema20,  price<ema20)))},
+        {"name":"EMA 50",  "value":f"Rs.{ema50:,.2f}",  **dict(zip(["sig","color"], sig(price>ema50,  price<ema50)))},
+        {"name":"EMA 200", "value":f"Rs.{ema200:,.2f}", **dict(zip(["sig","color"], sig(price>ema200, price<ema200)))},
+        {"name":"BB Upper","value":f"Rs.{bb_u:,.2f}",   **dict(zip(["sig","color"], sig(price<bb_u*0.97, price>bb_u)))},
+        {"name":"BB Lower","value":f"Rs.{bb_l:,.2f}",   **dict(zip(["sig","color"], sig(price<bb_l*1.02, price>bb_l*1.05)))},
+    ]
+    all_sigs = [i["sig"] for i in oscillators+moving_avgs]
+    buys  = all_sigs.count("BUY")
+    sells = all_sigs.count("SELL")
+    total = len(all_sigs)
+    if buys >= total*0.65:    verdict,vc = "STRONG BUY",  "#00b880"
+    elif buys >= total*0.5:   verdict,vc = "BUY",         "#27ae60"
+    elif sells >= total*0.65: verdict,vc = "STRONG SELL", "#e74c3c"
+    elif sells >= total*0.5:  verdict,vc = "SELL",        "#c0392b"
+    else:                     verdict,vc = "NEUTRAL",     "#f39c12"
+    return {"oscillators":oscillators,"moving_avgs":moving_avgs,
+            "verdict":verdict,"verdict_color":vc,
+            "buys":buys,"sells":sells,"neutrals":total-buys-sells,"total":total}
+
+
 # =============================================================
 # MAIN DASHBOARD
 # =============================================================
@@ -1099,6 +1275,132 @@ Unrealised: <b style="color:{color}">₹{open_pnl:+.2f}</b>
         st.line_chart(chart_df[["RSI"]])
         st.subheader("📈 MACD")
         st.line_chart(chart_df[["MACD","MACD_Signal"]])
+
+
+    # =============================================================
+    # CANDLESTICK PATTERNS + TA ANALYSIS TABS
+    # =============================================================
+    st.markdown("---")
+    tab_candle, tab_ta = st.tabs(["Candlestick Patterns", "Technical Analysis Summary"])
+
+    with tab_candle:
+        patterns = detect_candlestick_patterns(chart_df)
+        if patterns:
+            st.markdown(f"**{len(patterns)} patterns detected in recent candles:**")
+            patterns_sorted = sorted(patterns, key=lambda x:-x["strength"])
+            top = patterns_sorted[0]
+            top_border = "#00b880" if top["type"]=="bullish" else ("#e74c3c" if top["type"]=="bearish" else "#f39c12")
+            top_bg     = "#0d2818" if top["type"]=="bullish" else ("#2d0a0a" if top["type"]=="bearish" else "#1a1500")
+            star_str   = "".join(["*" for _ in range(top["strength"])])
+            st.markdown(f"""
+<div style='background:{top_bg};border:2px solid {top_border};border-radius:12px;padding:16px;margin-bottom:14px;'>
+  <div style='display:flex;justify-content:space-between;align-items:center;'>
+    <div>
+      <div style='font-size:11px;color:#888;text-transform:uppercase;'>Latest Strong Pattern</div>
+      <div style='font-size:20px;font-weight:700;color:{top_border};'>{top["pattern"]}
+        <span style='font-size:12px;color:#888;'>({top["candles"]} candle)</span>
+      </div>
+    </div>
+    <div style='text-align:right;'>
+      <div style='font-size:18px;font-weight:700;color:{top_border};'>{top["signal"]}</div>
+      <div style='font-size:11px;color:#888;'>Strength: {star_str}</div>
+    </div>
+  </div>
+  <div style='margin-top:8px;font-size:13px;color:#ccc;'>{top["desc"]}</div>
+  <div style='font-size:11px;color:#888;margin-top:4px;'>Date: {top["date"]}</div>
+</div>""", unsafe_allow_html=True)
+
+            p_cols = st.columns(3)
+            for i, p in enumerate(patterns_sorted):
+                color = "#00b880" if p["type"]=="bullish" else ("#e74c3c" if p["type"]=="bearish" else "#f39c12")
+                bg    = "#0d2818" if p["type"]=="bullish" else ("#2d0a0a" if p["type"]=="bearish" else "#1a1500")
+                icon  = "BUY" if p["type"]=="bullish" else ("SELL" if p["type"]=="bearish" else "NEUTRAL")
+                stars = "".join(["*" for _ in range(p["strength"])])
+                p_cols[i%3].markdown(f"""
+<div style='background:{bg};border:1px solid {color};border-radius:8px;padding:10px;margin-bottom:8px;'>
+  <div style='font-weight:600;color:{color};font-size:13px;'>{p["pattern"]}</div>
+  <div style='font-size:10px;color:#888;margin:2px 0;'>{p["candles"]} candle | {stars}</div>
+  <div style='font-size:11px;color:#ccc;'>{p["desc"][:55]}...</div>
+  <div style='font-size:11px;color:{color};font-weight:600;margin-top:3px;'>{p["signal"]}</div>
+  <div style='font-size:10px;color:#888;'>{p["date"]}</div>
+</div>""", unsafe_allow_html=True)
+
+            with st.expander("Pattern Guide — All 25 patterns explained"):
+                st.markdown("""
+**Bullish Patterns (BUY signals):**
+- **Hammer** — Long lower wick, buyers rejected lower prices
+- **Bullish Engulfing** — Green candle completely covers previous red candle
+- **Morning Star** — 3-candle reversal: big red, small star, big green
+- **Three White Soldiers** — 3 consecutive green candles, strong uptrend
+- **Bullish Marubozu** — Full green candle, no wicks, max bullish momentum
+- **Dragonfly Doji** — Long lower wick, buyers pushed price back up
+- **Piercing Line** — Green candle closes above midpoint of red candle
+- **Tweezer Bottom** — Same lows twice = strong support level
+- **Bullish Harami** — Small green inside big red = slowing bearish momentum
+- **Three Inside Up** — Reversal confirmed by 3rd closing candle
+
+**Bearish Patterns (SELL signals):**
+- **Shooting Star** — Long upper wick, sellers rejected higher prices
+- **Bearish Engulfing** — Red candle completely covers previous green candle
+- **Evening Star** — 3-candle reversal: big green, small star, big red
+- **Three Black Crows** — 3 consecutive red candles, strong downtrend
+- **Bearish Marubozu** — Full red candle, no wicks, max bearish momentum
+- **Gravestone Doji** — Long upper wick, sellers pushed price back down
+- **Dark Cloud Cover** — Red candle closes below midpoint of green candle
+- **Tweezer Top** — Same highs twice = strong resistance level
+- **Bearish Harami** — Small red inside big green = slowing bullish momentum
+- **Three Inside Down** — Reversal confirmed by 3rd closing candle
+
+**Neutral Patterns (WAIT):**
+- **Doji** — Open equals close, pure indecision, wait for breakout direction
+- **Spinning Top** — Small body with equal shadows, no clear direction
+""")
+        else:
+            st.info("No strong patterns in recent candles. Switch to Swing mode for more data.")
+
+    with tab_ta:
+        ta = get_ta_summary(chart_df)
+        if ta:
+            vc = ta["verdict_color"]
+            bg_v = "#0d2818" if "BUY" in ta["verdict"] else ("#2d0a0a" if "SELL" in ta["verdict"] else "#1a1500")
+            pct_buy = int(ta["buys"]/ta["total"]*100) if ta["total"] else 50
+            st.markdown(f"""
+<div style='background:{bg_v};border:2px solid {vc};border-radius:12px;
+padding:16px;margin-bottom:14px;text-align:center;'>
+  <div style='font-size:12px;color:#888;text-transform:uppercase;letter-spacing:.06em;'>TA Overall Verdict</div>
+  <div style='font-size:28px;font-weight:700;color:{vc};margin:6px 0;'>{ta["verdict"]}</div>
+  <div style='display:flex;justify-content:center;gap:24px;font-size:13px;'>
+    <span style='color:#00b880;'>BUY: {ta["buys"]}</span>
+    <span style='color:#f39c12;'>Neutral: {ta["neutrals"]}</span>
+    <span style='color:#e74c3c;'>SELL: {ta["sells"]}</span>
+  </div>
+  <div style='background:rgba(255,255,255,0.1);border-radius:99px;height:8px;
+  margin:10px auto;max-width:280px;'>
+    <div style='width:{pct_buy}%;background:{vc};border-radius:99px;height:8px;'></div>
+  </div>
+  <div style='font-size:11px;color:#888;'>{ta["buys"]}/{ta["total"]} indicators bullish</div>
+</div>""", unsafe_allow_html=True)
+
+            ta_c1, ta_c2 = st.columns(2)
+            with ta_c1:
+                st.markdown("**Oscillators**")
+                for ind in ta["oscillators"]:
+                    st.markdown(f"""<div style='display:flex;justify-content:space-between;
+padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-size:12px;'>
+<span style='color:#ccc;'>{ind["name"]}</span>
+<span style='color:#888;font-family:monospace;'>{ind["value"]}</span>
+<span style='color:{ind["color"]};font-weight:600;'>{ind["sig"]}</span>
+</div>""", unsafe_allow_html=True)
+            with ta_c2:
+                st.markdown("**Moving Averages**")
+                for ind in ta["moving_avgs"]:
+                    st.markdown(f"""<div style='display:flex;justify-content:space-between;
+padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-size:12px;'>
+<span style='color:#ccc;'>{ind["name"]}</span>
+<span style='color:#888;font-family:monospace;'>{ind["value"]}</span>
+<span style='color:{ind["color"]};font-weight:600;'>{ind["sig"]}</span>
+</div>""", unsafe_allow_html=True)
+
 
 # =============================================================
 # TRADE LOGS
