@@ -2347,3 +2347,308 @@ if st.session_state.trade_log:
         st.rerun()
 else:
     st.info("No trades yet — place your first trade above")
+
+
+# =============================================================
+# PROFESSIONAL ENHANCEMENT MODULES ADDED
+# =============================================================
+
+import sqlite3
+import hashlib
+from functools import lru_cache
+
+# =============================================================
+# PERFORMANCE OPTIMIZATION
+# =============================================================
+
+@st.cache_data(ttl=300)
+def cached_history(symbol, period="5d", interval="5m"):
+    try:
+        return yf.Ticker(symbol).history(period=period, interval=interval)
+    except Exception:
+        return pd.DataFrame()
+
+# =============================================================
+# SECURITY UPGRADE
+# =============================================================
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# =============================================================
+# DAILY RISK ENGINE
+# =============================================================
+
+MAX_DAILY_LOSS_PCT = 3
+MAX_CONSECUTIVE_LOSSES = 3
+MAX_TRADES_PER_DAY = 10
+
+def risk_engine(pnl_history):
+    today = datetime.date.today()
+    today_pnl = 0
+    consecutive_losses = 0
+    trades_today = 0
+
+    for trade in reversed(pnl_history):
+        try:
+            trade_date = datetime.datetime.strptime(
+                trade["time"], "%Y-%m-%d %H:%M:%S"
+            ).date()
+
+            if trade_date != today:
+                continue
+
+            trades_today += 1
+            pnl = float(trade.get("pnl", 0))
+            today_pnl += pnl
+
+            if pnl < 0:
+                consecutive_losses += 1
+            else:
+                consecutive_losses = 0
+
+        except Exception:
+            pass
+
+    return {
+        "today_pnl": round(today_pnl, 2),
+        "consecutive_losses": consecutive_losses,
+        "trades_today": trades_today,
+        "allow_trade": (
+            today_pnl > -(MAX_DAILY_LOSS_PCT / 100) * 100000
+            and consecutive_losses < MAX_CONSECUTIVE_LOSSES
+            and trades_today < MAX_TRADES_PER_DAY
+        )
+    }
+
+# =============================================================
+# BACKTESTING ENGINE
+# =============================================================
+
+def run_backtest(df):
+    if df is None or len(df) < 50:
+        return {}
+
+    balance = 100000
+    trades = []
+    position = None
+
+    for i in range(20, len(df)):
+        row = df.iloc[i]
+
+        buy_signal = (
+            row["Close"] > row["EMA20"]
+            and row["EMA20"] > row["EMA50"]
+            and row["MACD"] > row["MACD_Signal"]
+            and row["RSI"] > 50
+        )
+
+        sell_signal = (
+            row["Close"] < row["EMA20"]
+            and row["MACD"] < row["MACD_Signal"]
+        )
+
+        price = float(row["Close"])
+
+        if buy_signal and position is None:
+            position = price
+
+        elif sell_signal and position is not None:
+            pnl = price - position
+            trades.append(pnl)
+            balance += pnl
+            position = None
+
+    total = len(trades)
+    wins = len([x for x in trades if x > 0])
+    losses = len([x for x in trades if x <= 0])
+
+    win_rate = (wins / total * 100) if total > 0 else 0
+    total_pnl = round(sum(trades), 2)
+
+    return {
+        "trades": total,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 2),
+        "total_pnl": total_pnl,
+        "final_balance": round(balance, 2)
+    }
+
+# =============================================================
+# MULTI TIMEFRAME ANALYSIS
+# =============================================================
+
+def multi_timeframe_analysis(symbol):
+    results = {}
+
+    try:
+        tf_5m = compute_indicators(
+            cached_history(symbol, "5d", "5m")
+        )
+
+        tf_15m = compute_indicators(
+            cached_history(symbol, "5d", "15m")
+        )
+
+        tf_1h = compute_indicators(
+            cached_history(symbol, "1mo", "1h")
+        )
+
+        def trend(df):
+            if len(df) < 10:
+                return "UNKNOWN"
+
+            last = df.iloc[-1]
+
+            if last["Close"] > last["EMA20"] > last["EMA50"]:
+                return "BULLISH"
+
+            if last["Close"] < last["EMA20"] < last["EMA50"]:
+                return "BEARISH"
+
+            return "SIDEWAYS"
+
+        results["5m"] = trend(tf_5m)
+        results["15m"] = trend(tf_15m)
+        results["1h"] = trend(tf_1h)
+
+    except Exception as e:
+        results["error"] = str(e)
+
+    return results
+
+# =============================================================
+# TRADE JOURNAL AI
+# =============================================================
+
+def analyze_trade_journal(pnl_history):
+    if not pnl_history:
+        return {}
+
+    total = len(pnl_history)
+    wins = len([x for x in pnl_history if x.get("pnl", 0) > 0])
+    losses = total - wins
+
+    avg_win = (
+        sum(x["pnl"] for x in pnl_history if x.get("pnl", 0) > 0)
+        / max(wins, 1)
+    )
+
+    avg_loss = (
+        sum(x["pnl"] for x in pnl_history if x.get("pnl", 0) < 0)
+        / max(losses, 1)
+    )
+
+    return {
+        "total_trades": total,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round((wins / total) * 100, 2) if total else 0,
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "suggestion": (
+            "Good consistency"
+            if wins > losses
+            else "Reduce overtrading and improve entries"
+        )
+    }
+
+# =============================================================
+# ADVANCED AI SCORE
+# =============================================================
+
+def advanced_ai_score(df):
+    if len(df) < 50:
+        return 50
+
+    last = df.iloc[-1]
+    score = 0
+
+    if last["Close"] > last["EMA20"]:
+        score += 20
+
+    if last["EMA20"] > last["EMA50"]:
+        score += 20
+
+    if last["MACD"] > last["MACD_Signal"]:
+        score += 20
+
+    if 50 < last["RSI"] < 70:
+        score += 20
+
+    if last["Vol_Ratio"] > 1.2:
+        score += 20
+
+    return min(score, 100)
+
+# =============================================================
+# PROFESSIONAL DASHBOARD SECTION
+# =============================================================
+
+st.markdown("---")
+st.subheader("🧠 Professional Analytics")
+
+try:
+    risk_stats = risk_engine(st.session_state.pnl_history)
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("Daily P&L", f"₹{risk_stats['today_pnl']}")
+    c2.metric("Trades Today", risk_stats["trades_today"])
+    c3.metric("Consecutive Losses", risk_stats["consecutive_losses"])
+    c4.metric(
+        "Trading Status",
+        "ALLOWED" if risk_stats["allow_trade"] else "BLOCKED"
+    )
+
+except Exception as e:
+    st.warning(f"Risk engine issue: {e}")
+
+try:
+    bt = run_backtest(df)
+
+    if bt:
+        st.markdown("### 📈 Backtesting Results")
+
+        b1, b2, b3, b4 = st.columns(4)
+
+        b1.metric("Trades", bt["trades"])
+        b2.metric("Win Rate", f"{bt['win_rate']}%")
+        b3.metric("Total P&L", f"₹{bt['total_pnl']}")
+        b4.metric("Final Balance", f"₹{bt['final_balance']}")
+
+except Exception as e:
+    st.warning(f"Backtesting issue: {e}")
+
+try:
+    mtf = multi_timeframe_analysis(stock)
+
+    st.markdown("### ⏱ Multi Timeframe Analysis")
+
+    t1, t2, t3 = st.columns(3)
+
+    t1.metric("5m Trend", mtf.get("5m", "NA"))
+    t2.metric("15m Trend", mtf.get("15m", "NA"))
+    t3.metric("1H Trend", mtf.get("1h", "NA"))
+
+except Exception as e:
+    st.warning(f"MTF issue: {e}")
+
+try:
+    journal = analyze_trade_journal(st.session_state.pnl_history)
+
+    if journal:
+        st.markdown("### 📓 Trade Journal AI")
+
+        j1, j2, j3 = st.columns(3)
+
+        j1.metric("Win Rate", f"{journal['win_rate']}%")
+        j2.metric("Avg Win", f"₹{journal['avg_win']}")
+        j3.metric("Avg Loss", f"₹{journal['avg_loss']}")
+
+        st.info(journal["suggestion"])
+
+except Exception as e:
+    st.warning(f"Journal AI issue: {e}")
+
