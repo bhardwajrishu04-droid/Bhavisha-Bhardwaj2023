@@ -75,6 +75,14 @@ except Exception as _ae:
     _ALERT_IMPORT_ERROR = str(_ae)
 
 kite = KiteConnect(api_key=API_KEY)
+
+
+# =============================================================
+# GLOBAL UI COLOR VARIABLES FIX
+# =============================================================
+meter_bg = "#001a12"
+meter_color = "#00e5a0"
+
 st.set_page_config(page_title="AI Trading PRO+ v1.3", layout="wide", page_icon="📈")
 
 # =============================================================
