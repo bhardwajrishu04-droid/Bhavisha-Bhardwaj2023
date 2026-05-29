@@ -349,6 +349,7 @@ else:
 # LOGIN / SIGNUP
 # =============================================================
 DB = "users.json"
+# ── USER DATABASE — loads from Streamlit Secrets on cloud ────
 if not os.path.exists(DB):
     json.dump({}, open(DB, "w"))
 try:
@@ -356,9 +357,40 @@ try:
 except Exception:
     users = {}
 
+# Admin default
 if "admin" not in users:
     users["admin"] = {"password":"admin123","role":"admin","status":"active","expiry":"2099-12-31"}
     json.dump(users, open(DB, "w"))
+
+# ── Load seed users from Streamlit Secrets (persistent on cloud) ──
+def _load_seed_users():
+    """Load users from Streamlit Secrets — survives app restarts."""
+    try:
+        seed_json = st.secrets.get("SEED_USERS", None)
+        if not seed_json:
+            return
+        seed = json.loads(seed_json) if isinstance(seed_json, str) else seed_json
+        changed = False
+        for uname, udata in seed.items():
+            if uname not in users:
+                users[uname] = udata
+                changed = True
+            else:
+                # Update expiry from secrets if longer
+                try:
+                    cur_exp = datetime.datetime.strptime(users[uname].get("expiry","2000-01-01"),"%Y-%m-%d").date()
+                    new_exp = datetime.datetime.strptime(udata.get("expiry","2000-01-01"),"%Y-%m-%d").date()
+                    if new_exp > cur_exp:
+                        users[uname]["expiry"] = udata["expiry"]
+                        changed = True
+                except Exception:
+                    pass
+        if changed:
+            json.dump(users, open(DB, "w"))
+    except Exception:
+        pass
+
+_load_seed_users()
 
 if not st.session_state.user:
     st.title("🔐 Login / Signup")
@@ -3398,4 +3430,3 @@ try:
 
 except Exception as e:
     st.warning(f"Journal AI issue: {e}")
-
