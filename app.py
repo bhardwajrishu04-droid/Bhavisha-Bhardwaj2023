@@ -1546,41 +1546,56 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 
     fd = df[feat_cols].dropna()
     ai_prob       = 0.5
-    ai_model_name = "Default (insufficient data)"
+    _data_count   = len(fd)
+    ai_model_name = f"Training... ({_data_count} samples)"
     ai_confidence = "Low"
     ai_accuracy   = 0.0
     feature_importance = {}
     wf_results    = []   # walk-forward fold accuracies
 
-    if len(fd) >= 80:
+    if len(fd) >= 40:
         try:
             scaler   = StandardScaler()
-            td       = df["T3"].loc[fd.index].dropna()
+            # Use T1 (1-candle) if data is tight, T3 if enough
+            _target_col = "T3" if len(fd) >= 60 else "T1"
+            td       = df[_target_col].loc[fd.index].dropna()
             fd_clean = fd.loc[td.index]
             X_all    = scaler.fit_transform(fd_clean.values)
             y_all    = td.values
 
-            # ── WALK-FORWARD VALIDATION (5 folds) ───────────
-            tscv = TimeSeriesSplit(n_splits=5)
+            # ── WALK-FORWARD VALIDATION (3-5 folds based on data) ───
+            n_folds = 5 if len(fd_clean) >= 80 else 3
+            tscv = TimeSeriesSplit(n_splits=n_folds)
             fold_accs = []
             for fold_tr, fold_val in tscv.split(X_all):
                 Xf_tr, Xf_val = X_all[fold_tr], X_all[fold_val]
                 yf_tr, yf_val = y_all[fold_tr], y_all[fold_val]
-                if len(set(yf_tr)) < 2: continue
+                if len(set(yf_tr)) < 2 or len(Xf_val) < 2: continue
+                if len(set(yf_val)) < 1: continue
+                try:
+                    _rf = RandomForestClassifier(n_estimators=50,
+                            max_depth=4, random_state=42)
+                    _rf.fit(Xf_tr, yf_tr)
+                    fold_acc = accuracy_score(yf_val, _rf.predict(Xf_val))*100
+                    fold_accs.append(round(fold_acc, 1))
+                except Exception:
+                    continue
+            wf_results = fold_accs if fold_accs else []
 
-                # Quick RF per fold
-                _rf = RandomForestClassifier(n_estimators=100, max_depth=5,
-                                              random_state=42)
-                _rf.fit(Xf_tr, yf_tr)
-                fold_acc = accuracy_score(yf_val, _rf.predict(Xf_val)) * 100
-                fold_accs.append(round(fold_acc, 1))
-            wf_results = fold_accs
-
-            # Final train/val split (last fold)
+            # Final train/val split (last fold — 80/20 fallback for small data)
             splits = list(tscv.split(X_all))
-            tr_idx, val_idx = splits[-1]
+            if splits:
+                tr_idx, val_idx = splits[-1]
+            else:
+                cut = int(len(X_all)*0.8)
+                tr_idx = list(range(cut))
+                val_idx = list(range(cut, len(X_all)))
             X_tr, X_val = X_all[tr_idx], X_all[val_idx]
             y_tr, y_val = y_all[tr_idx], y_all[val_idx]
+
+            # Need at least 2 classes in train set
+            if len(set(y_tr)) < 2 or len(X_val) < 3:
+                raise ValueError("Insufficient class distribution")
 
             model_probs  = []
             model_labels = []
@@ -1589,11 +1604,11 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             # ── MODEL 1: XGBoost ────────────────────────────
             if XGB_OK:
                 try:
+                    _n_est = 200 if len(X_tr) >= 100 else 100
                     xgb_model = xgb.XGBClassifier(
-                        n_estimators=300, max_depth=5,
-                        learning_rate=0.05, subsample=0.8,
+                        n_estimators=_n_est, max_depth=4,
+                        learning_rate=0.08, subsample=0.8,
                         colsample_bytree=0.8, reg_alpha=0.1,
-                        use_label_encoder=False,
                         eval_metric="logloss", random_state=42,
                         verbosity=0
                     )
@@ -1611,15 +1626,17 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             # ── MODEL 2: LightGBM ───────────────────────────
             if LGB_OK:
                 try:
+                    _lgb_n = 200 if len(X_tr) >= 100 else 80
                     lgb_model = lgb.LGBMClassifier(
-                        n_estimators=300, num_leaves=31,
-                        learning_rate=0.05, subsample=0.8,
+                        n_estimators=_lgb_n, num_leaves=15,
+                        learning_rate=0.08, subsample=0.8,
                         colsample_bytree=0.8, reg_alpha=0.1,
+                        min_child_samples=5,
                         random_state=42, verbose=-1
                     )
                     lgb_model.fit(X_tr, y_tr,
                         eval_set=[(X_val, y_val)],
-                        callbacks=[lgb.early_stopping(30, verbose=False),
+                        callbacks=[lgb.early_stopping(20, verbose=False),
                                    lgb.log_evaluation(-1)])
                     p = lgb_model.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
                     a = accuracy_score(y_val, lgb_model.predict(X_val)) * 100
@@ -1974,6 +1991,14 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         # AI Model Details
         with st.expander("🤖 AI Engine — Full Details"):
             st.markdown(f"**Model:** `{ai_model_name}`")
+            _dc = len(df.dropna())
+            _tip_color = "#00b880" if _dc >= 80 else ("#f39c12" if _dc >= 40 else "#e74c3c")
+            st.markdown(
+                f"<div style='font-size:11px;color:{_tip_color};margin-bottom:8px;'>"
+                f"Data: {_dc} candles "
+                f"({'Good' if _dc>=80 else ('Minimum' if _dc>=40 else 'Too low — switch to Swing mode')})"
+                f" | Switch to Swing mode for best AI accuracy</div>",
+                unsafe_allow_html=True)
 
             # Model availability badges
             badge_cols = st.columns(5)
