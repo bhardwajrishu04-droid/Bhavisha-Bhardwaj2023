@@ -133,6 +133,16 @@ except Exception as _ae:
     ALERTS_AVAILABLE = False
     _ALERT_IMPORT_ERROR = str(_ae)
 
+# ── IST timezone helper ───────────────────────────────────────
+def now_ist():
+    """Current time in IST (UTC+5:30) — works on Streamlit Cloud."""
+    utc_now = datetime.datetime.utcnow()
+    ist_offset = datetime.timedelta(hours=5, minutes=30)
+    return utc_now + ist_offset
+
+def ist_str(fmt="%d %b %Y  %H:%M:%S IST"):
+    return now_ist().strftime(fmt)
+
 kite = KiteConnect(api_key=API_KEY)
 
 
@@ -283,7 +293,7 @@ def fire_alert(action, stk, px, q, sl, tgt, sc, md, pnl=None):
         st.session_state.last_alert_time[cooldown_key] = datetime.datetime.now()
         for r in results:
             st.session_state.alert_log.insert(0, {
-                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                "time": now_ist().strftime("%H:%M:%S"),
                 "stock": stk, "action": action, "result": r
             })
         st.session_state.alert_log = st.session_state.alert_log[:10]
@@ -1377,7 +1387,7 @@ def kelly_sizing(win_rate, rr_ratio, capital, max_risk_pct=0.20):
 # MAIN DASHBOARD
 # =============================================================
 st.title("📊 AI Trading PRO+ v1.3")
-st.caption(f"👤 {user}  |  {datetime.datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+st.caption(f"👤 {user}  |  {ist_str()}")
 
 st.markdown("### 🎯 Select Trading Mode")
 selected_mode = st.radio(
@@ -2320,7 +2330,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 
     def log_trade(action, stk, px, q, md, pnl=None):
         st.session_state.trade_log.append({
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
             "strategy": selected_mode, "stock": stk.replace(".NS",""),
             "action": action, "price": round(px,2), "qty": q,
             "mode": md, "SL": stop_loss, "Target": target_price,
@@ -2340,7 +2350,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 st.session_state.paper_position = {
                     "stock":stock,"price":live_px,"qty":qty,
                     "stop_loss":stop_loss,"target":target_price,"strategy":selected_mode,
-                    "time":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                    "time":now_ist().strftime("%Y-%m-%d %H:%M:%S")}
                 st.session_state.paper_balance -= live_px*qty
                 log_trade("BUY",stock,live_px,qty,"Paper")
                 st.success(f"📄 Paper BUY | {sym} | ₹{live_px:.2f}×{qty} | SL ₹{stop_loss} | TGT ₹{target_price}")
@@ -2355,7 +2365,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 pnl = (live_px-pos["price"])*pos["qty"]
                 st.session_state.paper_balance += live_px*pos["qty"]
                 st.session_state.pnl_history.append({
-                    "time":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "time":now_ist().strftime("%Y-%m-%d %H:%M:%S"),
                     "stock":stock,"pnl":round(pnl,2),"strategy":selected_mode})
                 log_trade("SELL",stock,live_px,pos["qty"],"Paper",pnl=pnl)
                 st.session_state.paper_position = None
