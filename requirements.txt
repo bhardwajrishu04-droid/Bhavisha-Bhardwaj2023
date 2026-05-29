@@ -1,0 +1,12 @@
+streamlit
+yfinance
+pandas
+plotly
+kiteconnect
+numpy
+scikit-learn>=1.3
+requests
+twilio
+scipy
+xgboost
+lightgbm
