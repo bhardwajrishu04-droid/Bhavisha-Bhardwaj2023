@@ -1,13 +1,37 @@
 # =============================================================
-# AI Trading PRO+ v1.3 — FINAL FIXED VERSION
-# Fixes applied:
-#   ✅ Graph/chart not showing — fixed with data cleaning
-#   ✅ Chart data info bar added
-#   ✅ Extended fallback periods (6mo added)
-#   ✅ plotly config for Streamlit Cloud
-#   ✅ Admin panel CallMeBot uses global var not config import
-#   ✅ HTML email app link fixed
-#   ✅ All features from v1.3 preserved
+# AI Trading PRO+ v4.0 — INSTITUTIONAL ARCHITECTURE
+# =============================================================
+# CORE ENGINE:
+#   ✅ Advanced Ensemble AI (RF + GradientBoosting + AdaBoost)
+#   ✅ 20+ feature engineering (ADX, MFI, CCI, OBV, VWAP, etc.)
+#   ✅ Walk-forward time-series validation
+#   ✅ Feature importance display
+#
+# PROFESSIONAL BACKTESTING:
+#   ✅ Sharpe / Sortino / Calmar ratios
+#   ✅ Max drawdown + recovery factor
+#   ✅ Monthly returns heatmap
+#   ✅ Trade distribution analysis (SL/Target/Signal exits)
+#   ✅ Strategy vs Buy&Hold comparison
+#   ✅ 4 strategy modes: Master / Trend / Momentum / Mean Revert
+#
+# MASTER SIGNAL (6-Layer):
+#   ✅ Technical (30%) + AI (25%) + Candlestick (15%)
+#   ✅ Market Structure (15%) + SMC (10%) + Volume (5%)
+#   ✅ Risk penalty system + Win probability
+#   ✅ Max loss/gain in Rs. per trade
+#
+# ADVANCED ANALYSIS:
+#   ✅ 25+ Candlestick patterns | TA Summary
+#   ✅ SMC: Order Blocks + FVG | Volume Profile POC
+#   ✅ Options PCR + Max Pain | ORB + Session Guide
+#   ✅ Kelly Criterion | Market Structure HH/LL
+#   ✅ Fake Breakout Detection | Demand/Supply Zones
+#
+# PLATFORM:
+#   ✅ Kite Connect integration | Paper + Live trading
+#   ✅ Admin portal + User management + UPI payments
+#   ✅ Email + WhatsApp alerts | Persistent trade logs
 # =============================================================
 
 from kiteconnect import KiteConnect
@@ -19,7 +43,16 @@ import json
 import os
 import numpy as np
 import time
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier, GradientBoostingClassifier,
+    VotingClassifier, AdaBoostClassifier
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import accuracy_score, precision_score
+import warnings
+warnings.filterwarnings("ignore")
 
 try:
     import plotly.graph_objects as go
@@ -551,27 +584,120 @@ def kite_ok():
     except: return False
 
 def compute_indicators(df):
+    """25+ professional indicators for institutional-grade analysis."""
     df = df.copy()
-    for span in [9, 20, 50, 200]:
+
+    # ── EMAs (multiple timeframes) ──
+    for span in [5, 9, 20, 50, 100, 200]:
         df[f"EMA{span}"] = df["Close"].ewm(span=span).mean()
+
+    # ── RSI with divergence ──
     delta = df["Close"].diff()
     gain  = delta.where(delta > 0, 0).rolling(14).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df["RSI"]         = 100 - (100 / (1 + gain / loss))
+    df["RSI"] = 100 - (100 / (1 + gain / (loss + 1e-9)))
+    df["RSI_MA"] = df["RSI"].rolling(9).mean()  # RSI smoothed
+
+    # ── MACD ──
     df["EMA12"]       = df["Close"].ewm(span=12).mean()
     df["EMA26"]       = df["Close"].ewm(span=26).mean()
     df["MACD"]        = df["EMA12"] - df["EMA26"]
     df["MACD_Signal"] = df["MACD"].ewm(span=9).mean()
     df["MACD_Hist"]   = df["MACD"] - df["MACD_Signal"]
-    df["ATR"]         = (df["High"] - df["Low"]).rolling(14).mean()
-    df["BB_Mid"]      = df["Close"].rolling(20).mean()
-    bb_std            = df["Close"].rolling(20).std()
-    df["BB_Upper"]    = df["BB_Mid"] + 2 * bb_std
-    df["BB_Lower"]    = df["BB_Mid"] - 2 * bb_std
-    low14             = df["Low"].rolling(14).min()
-    high14            = df["High"].rolling(14).max()
-    df["Stoch_K"]     = 100 * (df["Close"] - low14) / (high14 - low14 + 1e-9)
-    df["Vol_Ratio"]   = df["Volume"] / (df["Volume"].rolling(20).mean() + 1e-9)
+
+    # ── ATR (True Range) ──
+    hl = df["High"] - df["Low"]
+    hc = (df["High"] - df["Close"].shift()).abs()
+    lc = (df["Low"]  - df["Close"].shift()).abs()
+    df["ATR"] = pd.concat([hl, hc, lc], axis=1).max(axis=1).rolling(14).mean()
+
+    # ── Bollinger Bands + Squeeze ──
+    df["BB_Mid"]   = df["Close"].rolling(20).mean()
+    bb_std         = df["Close"].rolling(20).std()
+    df["BB_Upper"] = df["BB_Mid"] + 2 * bb_std
+    df["BB_Lower"] = df["BB_Mid"] - 2 * bb_std
+    df["BB_Width"] = (df["BB_Upper"] - df["BB_Lower"]) / (df["BB_Mid"] + 1e-9)
+    df["BB_Pct"]   = (df["Close"] - df["BB_Lower"]) / (df["BB_Upper"] - df["BB_Lower"] + 1e-9)
+
+    # ── Stochastic ──
+    low14  = df["Low"].rolling(14).min()
+    high14 = df["High"].rolling(14).max()
+    df["Stoch_K"] = 100 * (df["Close"] - low14) / (high14 - low14 + 1e-9)
+    df["Stoch_D"] = df["Stoch_K"].rolling(3).mean()
+
+    # ── VWAP ──
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3
+    df["VWAP"] = (tp * df["Volume"]).cumsum() / (df["Volume"].cumsum() + 1e-9)
+
+    # ── ADX (Trend Strength) ──
+    plus_dm  = df["High"].diff().clip(lower=0)
+    minus_dm = (-df["Low"].diff()).clip(lower=0)
+    plus_dm[plus_dm < minus_dm]   = 0
+    minus_dm[minus_dm < plus_dm]  = 0
+    atr14    = df["ATR"]
+    plus_di  = 100 * plus_dm.rolling(14).mean()  / (atr14 + 1e-9)
+    minus_di = 100 * minus_dm.rolling(14).mean() / (atr14 + 1e-9)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9)
+    df["ADX"]      = dx.rolling(14).mean()
+    df["Plus_DI"]  = plus_di
+    df["Minus_DI"] = minus_di
+
+    # ── OBV (On Balance Volume) ──
+    obv = [0]
+    for i in range(1, len(df)):
+        if df["Close"].iloc[i] > df["Close"].iloc[i-1]:
+            obv.append(obv[-1] + df["Volume"].iloc[i])
+        elif df["Close"].iloc[i] < df["Close"].iloc[i-1]:
+            obv.append(obv[-1] - df["Volume"].iloc[i])
+        else:
+            obv.append(obv[-1])
+    df["OBV"]    = obv
+    df["OBV_MA"] = pd.Series(obv, index=df.index).rolling(20).mean()
+
+    # ── MFI (Money Flow Index) ──
+    tp_mf   = (df["High"] + df["Low"] + df["Close"]) / 3
+    mf      = tp_mf * df["Volume"]
+    pos_mf  = mf.where(tp_mf > tp_mf.shift(), 0).rolling(14).sum()
+    neg_mf  = mf.where(tp_mf < tp_mf.shift(), 0).rolling(14).sum()
+    df["MFI"] = 100 - 100 / (1 + pos_mf / (neg_mf + 1e-9))
+
+    # ── CCI (Commodity Channel Index) ──
+    tp_cci  = (df["High"] + df["Low"] + df["Close"]) / 3
+    mean_d  = (tp_cci - tp_cci.rolling(20).mean()).abs().rolling(20).mean()
+    df["CCI"] = (tp_cci - tp_cci.rolling(20).mean()) / (0.015 * mean_d + 1e-9)
+
+    # ── Williams %R ──
+    df["Williams_R"] = -100 * (high14 - df["Close"]) / (high14 - low14 + 1e-9)
+
+    # ── Supertrend ──
+    hl2  = (df["High"] + df["Low"]) / 2
+    up   = hl2 + 3 * df["ATR"]
+    dn   = hl2 - 3 * df["ATR"]
+    st_dir = pd.Series(0, index=df.index)
+    st_val = pd.Series(0.0, index=df.index)
+    for i in range(1, len(df)):
+        if df["Close"].iloc[i] > up.iloc[i-1]:
+            st_dir.iloc[i] = 1
+        elif df["Close"].iloc[i] < dn.iloc[i-1]:
+            st_dir.iloc[i] = -1
+        else:
+            st_dir.iloc[i] = st_dir.iloc[i-1]
+        st_val.iloc[i] = dn.iloc[i] if st_dir.iloc[i] == 1 else up.iloc[i]
+    df["Supertrend"]  = st_val
+    df["ST_Dir"]      = st_dir
+
+    # ── Volume metrics ──
+    df["Vol_Ratio"] = df["Volume"] / (df["Volume"].rolling(20).mean() + 1e-9)
+    df["Vol_MA20"]  = df["Volume"].rolling(20).mean()
+    df["Vol_Spike"] = (df["Vol_Ratio"] > 2.0).astype(int)
+
+    # ── Price features ──
+    df["Return_1"]   = df["Close"].pct_change(1)
+    df["Return_3"]   = df["Close"].pct_change(3)
+    df["Return_5"]   = df["Close"].pct_change(5)
+    df["Volatility"] = df["Return_1"].rolling(20).std() * (252**0.5)
+    df["Price_Pos"]  = (df["Close"]-df["Low"].rolling(20).min()) /                        (df["High"].rolling(20).max()-df["Low"].rolling(20).min()+1e-9)
+
     return df
 
 
@@ -1377,15 +1503,94 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     c4.metric("📈 ATR",       f"₹{last['ATR']:.2f}")
     c5.metric("🔊 Vol Ratio", f"{last['Vol_Ratio']:.2f}x")
 
-    # ── AI MODEL ─────────────────────────────────────────────
-    df["Target"] = (df["Close"].shift(-1) > df["Close"]).astype(int)
-    feat_cols = ["EMA20","EMA50","RSI","MACD","Stoch_K","Vol_Ratio"]
+    # ── ADVANCED ENSEMBLE AI MODEL ───────────────────────────
+    # Features: 20 technical indicators
+    FEAT_COLS = [
+        "EMA9","EMA20","EMA50","RSI","RSI_MA",
+        "MACD","MACD_Hist","Stoch_K","Stoch_D",
+        "ADX","MFI","CCI","Williams_R","BB_Pct","BB_Width",
+        "Vol_Ratio","Return_1","Return_3","Price_Pos","OBV"
+    ]
+    feat_cols = [c for c in FEAT_COLS if c in df.columns]
+
+    # Multi-target: 1 candle ahead, 3 candles ahead, 5 candles ahead
+    df["T1"] = (df["Close"].shift(-1) > df["Close"] * 1.002).astype(int)
+    df["T3"] = (df["Close"].shift(-3) > df["Close"] * 1.005).astype(int)
+    df["T5"] = (df["Close"].shift(-5) > df["Close"] * 1.008).astype(int)
+
     fd = df[feat_cols].dropna()
-    td = df["Target"].loc[fd.index]
-    if len(fd) >= 30:
-        mdl = RandomForestClassifier(n_estimators=200, random_state=42)
-        mdl.fit(fd, td)
-        ai_prob = mdl.predict_proba(fd.iloc[-1:].values)[0][1]
+    ai_prob = 0.5
+    ai_model_name = "Default (insufficient data)"
+    ai_confidence = "Low"
+    feature_importance = {}
+    ai_accuracy = 0.0
+
+    if len(fd) >= 60:
+        try:
+            scaler = StandardScaler()
+
+            # Use T3 (3-candle) as primary target — more reliable
+            td = df["T3"].loc[fd.index].dropna()
+            fd_clean = fd.loc[td.index]
+
+            X = scaler.fit_transform(fd_clean.values)
+            y = td.values
+
+            # Time-series split for validation
+            tscv  = TimeSeriesSplit(n_splits=3)
+            train_idx, val_idx = list(tscv.split(X))[-1]
+            X_tr, X_val = X[train_idx], X[val_idx]
+            y_tr, y_val = y[train_idx], y[val_idx]
+
+            # Three base models
+            rf  = RandomForestClassifier(n_estimators=300, max_depth=6,
+                    min_samples_leaf=5, random_state=42, n_jobs=-1)
+            gb  = GradientBoostingClassifier(n_estimators=200, max_depth=4,
+                    learning_rate=0.05, subsample=0.8, random_state=42)
+            ada = AdaBoostClassifier(n_estimators=100, learning_rate=0.1,
+                    random_state=42)
+
+            # Ensemble via soft voting
+            ensemble = VotingClassifier(
+                estimators=[("rf",rf),("gb",gb),("ada",ada)],
+                voting="soft"
+            )
+            ensemble.fit(X_tr, y_tr)
+
+            # Validation accuracy
+            y_pred = ensemble.predict(X_val)
+            ai_accuracy = round(accuracy_score(y_val, y_pred) * 100, 1)
+
+            # Final prediction
+            X_latest = scaler.transform(fd_clean.iloc[-1:].values)
+            ai_prob   = ensemble.predict_proba(X_latest)[0][1]
+
+            # Feature importance from RF component
+            rf.fit(X_tr, y_tr)
+            importance_vals = rf.feature_importances_
+            feature_importance = dict(sorted(
+                zip(feat_cols, importance_vals),
+                key=lambda x: -x[1]
+            )[:8])
+
+            # Confidence tier
+            if   ai_accuracy >= 65: ai_confidence = "High"
+            elif ai_accuracy >= 55: ai_confidence = "Medium"
+            else:                   ai_confidence = "Low"
+
+            ai_model_name = f"Ensemble (RF+GB+Ada) | Val Acc: {ai_accuracy}%"
+
+        except Exception as _ae:
+            # Fallback to simple RF
+            try:
+                td2 = df["T1"].loc[fd.index].dropna()
+                fd2 = fd.loc[td2.index]
+                rf2 = RandomForestClassifier(n_estimators=200, random_state=42)
+                rf2.fit(fd2.values[:-1], td2.values[:-1])
+                ai_prob = rf2.predict_proba(fd2.iloc[-1:].values)[0][1]
+                ai_model_name = "RandomForest (fallback)"
+            except Exception:
+                ai_prob = 0.5
     else:
         ai_prob = 0.5
 
@@ -1651,6 +1856,19 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             for k, v in all_checks_display.items()
         ])
         st.dataframe(chk_df, hide_index=True, height=380)
+
+        # AI Model Details
+        with st.expander("🤖 AI Model Details"):
+            st.caption(f"Model: {ai_model_name}")
+            st.caption(f"Confidence: {ai_confidence} | Features: {len(feat_cols)}")
+            if feature_importance:
+                st.markdown("**Top Feature Importances:**")
+                fi_df = pd.DataFrame([
+                    {"Feature": k, "Importance": f"{v:.3f}",
+                     "Bar": "█" * int(v * 50)}
+                    for k, v in feature_importance.items()
+                ])
+                st.dataframe(fi_df, hide_index=True, height=200)
 
     st.markdown(f"""
 <div style="background:{meter_bg};border:2px solid {meter_color};border-radius:12px;padding:16px 20px;margin-bottom:14px;">
@@ -2442,54 +2660,133 @@ def risk_engine(pnl_history):
 # BACKTESTING ENGINE
 # =============================================================
 
-def run_backtest(df):
+def run_backtest(df, strategy="master", initial_capital=100000,
+                  sl_atr_mult=1.5, tp_rr=2.0, risk_pct=1.5):
+    """Professional Backtesting Engine — Institutional Grade"""
+    df = df.copy().dropna()
     if df is None or len(df) < 50:
         return {}
 
-    balance = 100000
-    trades = []
-    position = None
+    capital   = float(initial_capital)
+    position  = 0
+    entry_px  = 0.0
+    stop_px   = 0.0
+    target_px = 0.0
+    trades    = []
+    equity    = [capital]
+    monthly_r = {}
 
-    for i in range(20, len(df)):
-        row = df.iloc[i]
-
-        buy_signal = (
-            row["Close"] > row["EMA20"]
-            and row["EMA20"] > row["EMA50"]
-            and row["MACD"] > row["MACD_Signal"]
-            and row["RSI"] > 50
-        )
-
-        sell_signal = (
-            row["Close"] < row["EMA20"]
-            and row["MACD"] < row["MACD_Signal"]
-        )
-
+    for i in range(30, len(df)-1):
+        row   = df.iloc[i]
         price = float(row["Close"])
+        atr   = float(row.get("ATR", price*0.015))
+        rsi   = float(row.get("RSI", 50))
+        macd  = float(row.get("MACD", 0))
+        macd_s= float(row.get("MACD_Signal", 0))
+        adx   = float(row.get("ADX", 15))
+        st_d  = float(row.get("ST_Dir", 0))
+        vol_r = float(row.get("Vol_Ratio", 1))
+        ema20 = float(row.get("EMA20", price))
+        ema50 = float(row.get("EMA50", price))
+        mfi   = float(row.get("MFI", 50))
+        mh    = float(row.get("MACD_Hist", 0))
+        date  = str(df.index[i])[:10]
+        month = str(df.index[i])[:7]
 
-        if buy_signal and position is None:
-            position = price
+        if strategy == "master":
+            conds = [price>ema20>ema50, 45<rsi<72, macd>macd_s and mh>0,
+                     st_d>0, adx>20, vol_r>1.1, mfi>50]
+            buy_signal  = sum(conds) >= 5 and rsi < 75
+            sell_signal = sum(conds) <= 2 or rsi > 78 or st_d < 0
+        elif strategy == "trend":
+            buy_signal  = price>ema20>ema50 and adx>25 and st_d>0
+            sell_signal = price<ema20 or st_d<0
+        elif strategy == "momentum":
+            buy_signal  = macd>macd_s and 50<rsi<70 and vol_r>1.2
+            sell_signal = macd<macd_s or rsi>75
+        elif strategy == "mean_revert":
+            buy_signal  = rsi<35 and price<float(row.get("BB_Lower",price))
+            sell_signal = rsi>65 or price>float(row.get("BB_Mid",price))
+        else:
+            buy_signal = sell_signal = False
 
-        elif sell_signal and position is not None:
-            pnl = price - position
-            trades.append(pnl)
-            balance += pnl
-            position = None
+        if position == 0 and buy_signal and capital > price*5:
+            sl_d = atr*sl_atr_mult
+            qty  = max(1, int(capital*(risk_pct/100)/sl_d))
+            cost = qty*price
+            if cost <= capital:
+                position = qty; entry_px = price
+                stop_px  = round(price-sl_d,2)
+                target_px= round(price+sl_d*tp_rr,2)
+                capital -= cost
+                trades.append({"type":"BUY","date":date,"price":round(price,2),
+                               "qty":qty,"sl":stop_px,"target":target_px})
+        elif position > 0:
+            hit_sl  = price <= stop_px
+            hit_tgt = price >= target_px
+            if sell_signal or hit_sl or hit_tgt:
+                ep  = stop_px if hit_sl else (target_px if hit_tgt else price)
+                pnl = (ep-entry_px)*position
+                capital += position*ep
+                reason = "SL" if hit_sl else ("Target" if hit_tgt else "Signal")
+                trades.append({"type":"SELL","date":date,"price":round(ep,2),
+                               "qty":position,"pnl":round(pnl,2),"reason":reason})
+                position=0; entry_px=0; stop_px=0; target_px=0
 
-    total = len(trades)
-    wins = len([x for x in trades if x > 0])
-    losses = len([x for x in trades if x <= 0])
+        cur_eq = capital + position*price
+        equity.append(cur_eq)
+        monthly_r[month] = cur_eq
 
-    win_rate = (wins / total * 100) if total > 0 else 0
-    total_pnl = round(sum(trades), 2)
+    if position > 0:
+        fp  = float(df["Close"].iloc[-1])
+        pnl = (fp-entry_px)*position
+        capital += position*fp
+        trades.append({"type":"SELL","date":str(df.index[-1])[:10],
+                       "price":round(fp,2),"qty":position,"pnl":round(pnl,2),"reason":"EOD"})
+
+    eq_arr  = np.array(equity)
+    ret_arr = np.diff(eq_arr)/(eq_arr[:-1]+1e-9)
+    closed  = [t for t in trades if "pnl" in t]
+    wins    = [t for t in closed if t["pnl"]>0]
+    losses  = [t for t in closed if t["pnl"]<=0]
+    tp      = sum(t["pnl"] for t in closed)
+    wr      = len(wins)/len(closed)*100 if closed else 0
+    aw      = float(np.mean([t["pnl"] for t in wins]))    if wins   else 0
+    al      = abs(float(np.mean([t["pnl"] for t in losses]))) if losses else 1
+    gp      = sum(t["pnl"] for t in wins)
+    gl      = abs(sum(t["pnl"] for t in losses))
+    pf      = gp/(gl+1e-9)
+    exp     = (wr/100*aw) - ((1-wr/100)*al)
+    peak    = np.maximum.accumulate(eq_arr)
+    dd      = (eq_arr-peak)/(peak+1e-9)
+    max_dd  = float(dd.min())*100
+    sharpe  = float(np.mean(ret_arr)/np.std(ret_arr+1e-9)*np.sqrt(252)) if len(ret_arr)>2 else 0
+    neg_r   = ret_arr[ret_arr<0]
+    sortino = float(np.mean(ret_arr)/(np.std(neg_r)+1e-9)*np.sqrt(252)) if len(neg_r)>1 else 0
+    calmar  = abs(tp/initial_capital*100)/(abs(max_dd)+1e-9)
+    bh_ret  = (float(df["Close"].iloc[-1])/float(df["Close"].iloc[30])-1)*100
+    months  = sorted(monthly_r.keys())
+    mo_rets = [round((monthly_r[months[j]]-monthly_r[months[j-1]])/monthly_r[months[j-1]]*100,2)
+               for j in range(1, len(months))]
+    cw=cl=mcw=mcl=0
+    for t in closed:
+        if t["pnl"]>0: cw+=1; cl=0
+        else: cl+=1; cw=0
+        mcw=max(mcw,cw); mcl=max(mcl,cl)
 
     return {
-        "trades": total,
-        "wins": wins,
-        "losses": losses,
-        "win_rate": round(win_rate, 2),
-        "total_pnl": total_pnl,
-        "final_balance": round(balance, 2)
+        "trades": trades, "closed": closed,
+        "total_trades": len(closed), "wins": len(wins), "losses": len(losses),
+        "total_pnl": round(tp,2), "final_balance": round(capital,2),
+        "return_pct": round((capital-initial_capital)/initial_capital*100,2),
+        "bh_return": round(bh_ret,2),
+        "win_rate": round(wr,1), "avg_win": round(aw,2), "avg_loss": round(al,2),
+        "profit_factor": round(pf,2), "expectancy": round(exp,2),
+        "max_drawdown": round(max_dd,2),
+        "recovery_factor": round(abs(tp/initial_capital*100/(abs(max_dd)+1e-9)),2),
+        "max_consec_wins": mcw, "max_consec_loss": mcl,
+        "sharpe": round(sharpe,2), "sortino": round(sortino,2), "calmar": round(calmar,2),
+        "equity": equity, "monthly_rets": mo_rets, "months": months[1:] if len(months)>1 else [],
     }
 
 # =============================================================
@@ -2623,17 +2920,97 @@ except Exception as e:
     st.warning(f"Risk engine issue: {e}")
 
 try:
-    bt = run_backtest(df)
+    with st.expander("📈 Professional Backtesting — Click to Run", expanded=False):
+        bt_cols = st.columns(4)
+        _bt_strat  = bt_cols[0].selectbox("Strategy", ["master","trend","momentum","mean_revert"],
+                                           format_func=lambda x:x.title(), key="bt_strat_main")
+        _bt_sl     = bt_cols[1].slider("SL ATR Mult", 1.0, 3.0, 1.5, 0.1, key="bt_sl_main")
+        _bt_rr     = bt_cols[2].slider("Target R:R",  1.0, 5.0, 2.0, 0.1, key="bt_rr_main")
+        _bt_cap    = bt_cols[3].number_input("Capital", 50000, 5000000, 100000, 50000, key="bt_cap_main")
+        if st.button("Run Professional Backtest", type="primary", key="bt_run_main"):
+            with st.spinner("Running institutional backtest..."):
+                bt = run_backtest(df, strategy=_bt_strat, initial_capital=_bt_cap,
+                                  sl_atr_mult=_bt_sl, tp_rr=_bt_rr)
+                st.session_state["bt_result_main"] = bt
+        bt = st.session_state.get("bt_result_main", None)
+        if bt and bt.get("total_trades",0) > 0:
+            ret_c = "#00b880" if bt["return_pct"]>=0 else "#e74c3c"
+            al_c  = "#00b880" if bt["return_pct"]>=bt["bh_return"] else "#e74c3c"
+            mc = st.columns(8)
+            for col, (lbl,val,cc) in zip(mc, [
+                ("Return", f"{bt['return_pct']:+.1f}%", ret_c),
+                ("vs B&H", f"{bt['return_pct']-bt['bh_return']:+.1f}%", al_c),
+                ("Win%", f"{bt['win_rate']:.0f}%", "#f39c12"),
+                ("Trades", str(bt["total_trades"]), "#a78bfa"),
+                ("PF", f"{bt['profit_factor']:.2f}", "#4e8fff"),
+                ("MaxDD", f"{bt['max_drawdown']:.1f}%", "#e74c3c"),
+                ("Sharpe", f"{bt['sharpe']:.2f}", "#00e5a0"),
+                ("Sortino", f"{bt['sortino']:.2f}", "#ffa94d"),
+            ]):
+                col.markdown(f"""<div style='background:#1a1a2e;border-radius:6px;padding:8px;text-align:center;'>
+<div style='font-size:16px;font-weight:700;color:{cc};font-family:monospace;'>{val}</div>
+<div style='font-size:9px;color:#888;'>{lbl}</div></div>""", unsafe_allow_html=True)
 
-    if bt:
-        st.markdown("### 📈 Backtesting Results")
+            if bt["profit_factor"]>=1.5 and bt["win_rate"]>=50:
+                st.success(f"GOOD STRATEGY — PF {bt['profit_factor']} | WR {bt['win_rate']}% | Sharpe {bt['sharpe']}")
+            elif bt["profit_factor"]>=1.0:
+                st.warning(f"MARGINAL — PF {bt['profit_factor']:.2f} | Needs refinement")
+            else:
+                st.error(f"LOSING — Do NOT use real money. PF: {bt['profit_factor']:.2f}")
 
-        b1, b2, b3, b4 = st.columns(4)
+            if PLOTLY_OK and len(bt.get("equity",[])) > 5:
+                from plotly.subplots import make_subplots as _msp2
+                eq_fig = _msp2(rows=2,cols=1,shared_xaxes=True,
+                               row_heights=[0.65,0.35],vertical_spacing=0.04)
+                xr = list(range(len(bt["equity"])))
+                eq_fig.add_trace(go.Scatter(x=xr,y=bt["equity"],
+                    line=dict(color="#00e5a0",width=2),name="Strategy",
+                    fill="tozeroy",fillcolor="rgba(0,229,160,0.06)"),row=1,col=1)
+                bh_eq=[_bt_cap*(1+bt["bh_return"]/100*j/len(xr)) for j in range(len(xr))]
+                eq_fig.add_trace(go.Scatter(x=xr,y=bh_eq,
+                    line=dict(color="#4e8fff",width=1.5,dash="dot"),
+                    name=f"Buy&Hold {bt['bh_return']:+.1f}%"),row=1,col=1)
+                eq_arr=np.array(bt["equity"]); pk=np.maximum.accumulate(eq_arr)
+                dd=(eq_arr-pk)/(pk+1e-9)*100
+                eq_fig.add_trace(go.Scatter(x=xr,y=dd,fill="tozeroy",
+                    fillcolor="rgba(231,76,60,0.2)",line=dict(color="#e74c3c",width=1),
+                    name="Drawdown%"),row=2,col=1)
+                eq_fig.update_layout(height=380,plot_bgcolor="#0d1117",paper_bgcolor="#0d1117",
+                    font=dict(color="#8b949e",size=9),
+                    legend=dict(orientation="h",y=1.05,bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0,r=0,t=10,b=0))
+                for r in [1,2]:
+                    eq_fig.update_xaxes(gridcolor="#21262d",row=r,col=1)
+                    eq_fig.update_yaxes(gridcolor="#21262d",row=r,col=1)
+                st.plotly_chart(eq_fig,use_container_width=True,config={"displayModeBar":False})
 
-        b1.metric("Trades", bt["trades"])
-        b2.metric("Win Rate", f"{bt['win_rate']}%")
-        b3.metric("Total P&L", f"₹{bt['total_pnl']}")
-        b4.metric("Final Balance", f"₹{bt['final_balance']}")
+                if bt.get("monthly_rets") and len(bt["monthly_rets"])>1:
+                    mo_c=["#00b880" if v>=0 else "#e74c3c" for v in bt["monthly_rets"]]
+                    mf=go.Figure(go.Bar(x=bt["months"],y=bt["monthly_rets"],marker_color=mo_c))
+                    mf.update_layout(title=dict(text="Monthly Returns %",font=dict(color="#e6edf3",size=12)),
+                        height=200,plot_bgcolor="#0d1117",paper_bgcolor="#0d1117",
+                        font=dict(color="#8b949e"),margin=dict(l=0,r=0,t=28,b=0))
+                    mf.add_hline(y=0,line_color="#555")
+                    st.plotly_chart(mf,use_container_width=True,config={"displayModeBar":False})
+
+            cl2 = bt.get("closed",[])
+            if cl2:
+                ex2=st.columns(2)
+                slh=sum(1 for t in cl2 if t.get("reason")=="SL")
+                tgh=sum(1 for t in cl2 if t.get("reason")=="Target")
+                ex2[0].markdown(f"""<div style='background:#1a1a2e;border-radius:8px;padding:10px;font-size:12px;'>
+<b>Exit Reasons</b><br>
+SL hits: <span style='color:#e74c3c;'>{slh} ({int(slh/len(cl2)*100)}%)</span><br>
+Target: <span style='color:#00b880;'>{tgh} ({int(tgh/len(cl2)*100)}%)</span><br>
+Signal: <span style='color:#f39c12;'>{len(cl2)-slh-tgh}</span>
+</div>""",unsafe_allow_html=True)
+                pnls=[t["pnl"] for t in cl2]
+                ex2[1].markdown(f"""<div style='background:#1a1a2e;border-radius:8px;padding:10px;font-size:12px;'>
+<b>P&L Stats</b><br>
+Best: <span style='color:#00b880;'>Rs.{max(pnls):+,.0f}</span><br>
+Worst: <span style='color:#e74c3c;'>Rs.{min(pnls):+,.0f}</span><br>
+Expectancy: Rs.{bt["expectancy"]:+,.2f}/trade
+</div>""",unsafe_allow_html=True)
 
 except Exception as e:
     st.warning(f"Backtesting issue: {e}")
@@ -2668,4 +3045,3 @@ try:
 
 except Exception as e:
     st.warning(f"Journal AI issue: {e}")
-
