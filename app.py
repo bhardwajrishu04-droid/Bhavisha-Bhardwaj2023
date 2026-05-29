@@ -1,10 +1,11 @@
 # =============================================================
-# AI Trading PRO+ v4.0 — INSTITUTIONAL ARCHITECTURE
+# AI Trading PRO+ v5.0 — ULTRA INSTITUTIONAL ARCHITECTURE
 # =============================================================
 # CORE ENGINE:
-#   ✅ Advanced Ensemble AI (RF + GradientBoosting + AdaBoost)
+#   ✅ XGBoost + LightGBM + GradBoost + RF + AdaBoost (5-model ensemble)
 #   ✅ 20+ feature engineering (ADX, MFI, CCI, OBV, VWAP, etc.)
-#   ✅ Walk-forward time-series validation
+#   ✅ Walk-forward time-series validation (5 folds)
+#   ✅ LSTM price forecast (5-candle ahead)
 #   ✅ Feature importance display
 #
 # PROFESSIONAL BACKTESTING:
@@ -13,6 +14,7 @@
 #   ✅ Monthly returns heatmap
 #   ✅ Trade distribution analysis (SL/Target/Signal exits)
 #   ✅ Strategy vs Buy&Hold comparison
+#   ✅ Trade Replay — step through every trade
 #   ✅ 4 strategy modes: Master / Trend / Momentum / Mean Revert
 #
 # MASTER SIGNAL (6-Layer):
@@ -48,11 +50,35 @@ from sklearn.ensemble import (
     VotingClassifier, AdaBoostClassifier
 )
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, precision_score
+from sklearn.metrics import accuracy_score
 import warnings
 warnings.filterwarnings("ignore")
+
+# XGBoost — optional
+try:
+    import xgboost as xgb
+    XGB_OK = True
+except ImportError:
+    XGB_OK = False
+
+# LightGBM — optional
+try:
+    import lightgbm as lgb
+    LGB_OK = True
+except ImportError:
+    LGB_OK = False
+
+# TensorFlow/Keras for LSTM — optional
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+    KERAS_OK = True
+except ImportError:
+    KERAS_OK = False
 
 try:
     import plotly.graph_objects as go
@@ -1503,8 +1529,10 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     c4.metric("📈 ATR",       f"₹{last['ATR']:.2f}")
     c5.metric("🔊 Vol Ratio", f"{last['Vol_Ratio']:.2f}x")
 
-    # ── ADVANCED ENSEMBLE AI MODEL ───────────────────────────
-    # Features: 20 technical indicators
+    # ── ULTRA ADVANCED AI ENGINE ─────────────────────────────
+    # Models: XGBoost + LightGBM + RF + GB + AdaBoost
+    # Walk-Forward TimeSeriesSplit Validation
+    # ─────────────────────────────────────────────────────────
     FEAT_COLS = [
         "EMA9","EMA20","EMA50","RSI","RSI_MA",
         "MACD","MACD_Hist","Stoch_K","Stoch_D",
@@ -1513,75 +1541,161 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     ]
     feat_cols = [c for c in FEAT_COLS if c in df.columns]
 
-    # Multi-target: 1 candle ahead, 3 candles ahead, 5 candles ahead
     df["T1"] = (df["Close"].shift(-1) > df["Close"] * 1.002).astype(int)
     df["T3"] = (df["Close"].shift(-3) > df["Close"] * 1.005).astype(int)
-    df["T5"] = (df["Close"].shift(-5) > df["Close"] * 1.008).astype(int)
 
     fd = df[feat_cols].dropna()
-    ai_prob = 0.5
+    ai_prob       = 0.5
     ai_model_name = "Default (insufficient data)"
     ai_confidence = "Low"
+    ai_accuracy   = 0.0
     feature_importance = {}
-    ai_accuracy = 0.0
+    wf_results    = []   # walk-forward fold accuracies
 
-    if len(fd) >= 60:
+    if len(fd) >= 80:
         try:
-            scaler = StandardScaler()
-
-            # Use T3 (3-candle) as primary target — more reliable
-            td = df["T3"].loc[fd.index].dropna()
+            scaler   = StandardScaler()
+            td       = df["T3"].loc[fd.index].dropna()
             fd_clean = fd.loc[td.index]
+            X_all    = scaler.fit_transform(fd_clean.values)
+            y_all    = td.values
 
-            X = scaler.fit_transform(fd_clean.values)
-            y = td.values
+            # ── WALK-FORWARD VALIDATION (5 folds) ───────────
+            tscv = TimeSeriesSplit(n_splits=5)
+            fold_accs = []
+            for fold_tr, fold_val in tscv.split(X_all):
+                Xf_tr, Xf_val = X_all[fold_tr], X_all[fold_val]
+                yf_tr, yf_val = y_all[fold_tr], y_all[fold_val]
+                if len(set(yf_tr)) < 2: continue
 
-            # Time-series split for validation
-            tscv  = TimeSeriesSplit(n_splits=3)
-            train_idx, val_idx = list(tscv.split(X))[-1]
-            X_tr, X_val = X[train_idx], X[val_idx]
-            y_tr, y_val = y[train_idx], y[val_idx]
+                # Quick RF per fold
+                _rf = RandomForestClassifier(n_estimators=100, max_depth=5,
+                                              random_state=42)
+                _rf.fit(Xf_tr, yf_tr)
+                fold_acc = accuracy_score(yf_val, _rf.predict(Xf_val)) * 100
+                fold_accs.append(round(fold_acc, 1))
+            wf_results = fold_accs
 
-            # Three base models
-            rf  = RandomForestClassifier(n_estimators=300, max_depth=6,
-                    min_samples_leaf=5, random_state=42, n_jobs=-1)
-            gb  = GradientBoostingClassifier(n_estimators=200, max_depth=4,
+            # Final train/val split (last fold)
+            splits = list(tscv.split(X_all))
+            tr_idx, val_idx = splits[-1]
+            X_tr, X_val = X_all[tr_idx], X_all[val_idx]
+            y_tr, y_val = y_all[tr_idx], y_all[val_idx]
+
+            model_probs  = []
+            model_labels = []
+            all_importances = []
+
+            # ── MODEL 1: XGBoost ────────────────────────────
+            if XGB_OK:
+                try:
+                    xgb_model = xgb.XGBClassifier(
+                        n_estimators=300, max_depth=5,
+                        learning_rate=0.05, subsample=0.8,
+                        colsample_bytree=0.8, reg_alpha=0.1,
+                        use_label_encoder=False,
+                        eval_metric="logloss", random_state=42,
+                        verbosity=0
+                    )
+                    xgb_model.fit(X_tr, y_tr,
+                        eval_set=[(X_val, y_val)],
+                        verbose=False)
+                    p = xgb_model.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
+                    a = accuracy_score(y_val, xgb_model.predict(X_val)) * 100
+                    model_probs.append(p)
+                    model_labels.append(f"XGBoost {a:.1f}%")
+                    all_importances.append(dict(zip(feat_cols, xgb_model.feature_importances_)))
+                except Exception:
+                    pass
+
+            # ── MODEL 2: LightGBM ───────────────────────────
+            if LGB_OK:
+                try:
+                    lgb_model = lgb.LGBMClassifier(
+                        n_estimators=300, num_leaves=31,
+                        learning_rate=0.05, subsample=0.8,
+                        colsample_bytree=0.8, reg_alpha=0.1,
+                        random_state=42, verbose=-1
+                    )
+                    lgb_model.fit(X_tr, y_tr,
+                        eval_set=[(X_val, y_val)],
+                        callbacks=[lgb.early_stopping(30, verbose=False),
+                                   lgb.log_evaluation(-1)])
+                    p = lgb_model.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
+                    a = accuracy_score(y_val, lgb_model.predict(X_val)) * 100
+                    model_probs.append(p)
+                    model_labels.append(f"LightGBM {a:.1f}%")
+                    all_importances.append(dict(zip(feat_cols,
+                        lgb_model.feature_importances_ / (lgb_model.feature_importances_.sum()+1e-9))))
+                except Exception:
+                    pass
+
+            # ── MODEL 3: Gradient Boosting ──────────────────
+            try:
+                gb = GradientBoostingClassifier(
+                    n_estimators=200, max_depth=4,
                     learning_rate=0.05, subsample=0.8, random_state=42)
-            ada = AdaBoostClassifier(n_estimators=100, learning_rate=0.1,
-                    random_state=42)
+                gb.fit(X_tr, y_tr)
+                p = gb.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
+                a = accuracy_score(y_val, gb.predict(X_val)) * 100
+                model_probs.append(p)
+                model_labels.append(f"GradBoost {a:.1f}%")
+                all_importances.append(dict(zip(feat_cols, gb.feature_importances_)))
+            except Exception:
+                pass
 
-            # Ensemble via soft voting
-            ensemble = VotingClassifier(
-                estimators=[("rf",rf),("gb",gb),("ada",ada)],
-                voting="soft"
-            )
-            ensemble.fit(X_tr, y_tr)
+            # ── MODEL 4: RandomForest ───────────────────────
+            try:
+                rf = RandomForestClassifier(
+                    n_estimators=300, max_depth=6,
+                    min_samples_leaf=5, random_state=42)
+                rf.fit(X_tr, y_tr)
+                p = rf.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
+                a = accuracy_score(y_val, rf.predict(X_val)) * 100
+                model_probs.append(p)
+                model_labels.append(f"RandomForest {a:.1f}%")
+                all_importances.append(dict(zip(feat_cols, rf.feature_importances_)))
+            except Exception:
+                pass
 
-            # Validation accuracy
-            y_pred = ensemble.predict(X_val)
-            ai_accuracy = round(accuracy_score(y_val, y_pred) * 100, 1)
+            # ── MODEL 5: AdaBoost ───────────────────────────
+            try:
+                ada = AdaBoostClassifier(
+                    n_estimators=100, learning_rate=0.1, random_state=42)
+                ada.fit(X_tr, y_tr)
+                p = ada.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
+                a = accuracy_score(y_val, ada.predict(X_val)) * 100
+                model_probs.append(p)
+                model_labels.append(f"AdaBoost {a:.1f}%")
+            except Exception:
+                pass
 
-            # Final prediction
-            X_latest = scaler.transform(fd_clean.iloc[-1:].values)
-            ai_prob   = ensemble.predict_proba(X_latest)[0][1]
+            # ── ENSEMBLE AVERAGE ─────────────────────────────
+            if model_probs:
+                ai_prob      = float(np.mean(model_probs))
+                ai_accuracy  = round(float(np.mean([
+                    float(l.split()[-1].replace("%",""))
+                    for l in model_labels])), 1)
+                model_count  = len(model_probs)
+                ai_model_name = (
+                    f"{'XGB+' if XGB_OK else ''}{'LGB+' if LGB_OK else ''}"
+                    f"GB+RF+Ada ({model_count} models) | "
+                    f"Avg Acc: {ai_accuracy}%"
+                )
+                # Average feature importance
+                if all_importances:
+                    combined = {}
+                    for imp_dict in all_importances:
+                        for k,v in imp_dict.items():
+                            combined[k] = combined.get(k,0) + v/len(all_importances)
+                    feature_importance = dict(sorted(
+                        combined.items(), key=lambda x:-x[1])[:8])
 
-            # Feature importance from RF component
-            rf.fit(X_tr, y_tr)
-            importance_vals = rf.feature_importances_
-            feature_importance = dict(sorted(
-                zip(feat_cols, importance_vals),
-                key=lambda x: -x[1]
-            )[:8])
-
-            # Confidence tier
             if   ai_accuracy >= 65: ai_confidence = "High"
             elif ai_accuracy >= 55: ai_confidence = "Medium"
             else:                   ai_confidence = "Low"
 
-            ai_model_name = f"Ensemble (RF+GB+Ada) | Val Acc: {ai_accuracy}%"
-
         except Exception as _ae:
-            # Fallback to simple RF
             try:
                 td2 = df["T1"].loc[fd.index].dropna()
                 fd2 = fd.loc[td2.index]
@@ -1858,17 +1972,153 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         st.dataframe(chk_df, hide_index=True, height=380)
 
         # AI Model Details
-        with st.expander("🤖 AI Model Details"):
-            st.caption(f"Model: {ai_model_name}")
-            st.caption(f"Confidence: {ai_confidence} | Features: {len(feat_cols)}")
+        with st.expander("🤖 AI Engine — Full Details"):
+            st.markdown(f"**Model:** `{ai_model_name}`")
+
+            # Model availability badges
+            badge_cols = st.columns(5)
+            for i,(nm,ok) in enumerate([
+                ("XGBoost", XGB_OK),("LightGBM",LGB_OK),
+                ("GradBoost",True),("RandomForest",True),("AdaBoost",True)]):
+                c = "#00b880" if ok else "#555"
+                badge_cols[i].markdown(
+                    f"<div style='background:{c}22;border:1px solid {c};"
+                    f"border-radius:6px;padding:5px;text-align:center;"
+                    f"font-size:11px;font-weight:600;color:{c};'>"
+                    f"{'✅' if ok else '–'} {nm}</div>",
+                    unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Walk-Forward Results
+            if wf_results and len(wf_results) > 1:
+                st.markdown("**Walk-Forward Validation (5 folds):**")
+                wf_cols = st.columns(len(wf_results))
+                for i, acc in enumerate(wf_results):
+                    cc = "#00b880" if acc>=60 else ("#f39c12" if acc>=50 else "#e74c3c")
+                    wf_cols[i].markdown(
+                        f"<div style='background:{cc}22;border:1px solid {cc};"
+                        f"border-radius:6px;padding:8px;text-align:center;'>"
+                        f"<div style='font-size:14px;font-weight:700;color:{cc};'>{acc}%</div>"
+                        f"<div style='font-size:9px;color:#888;'>Fold {i+1}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True)
+                avg_wf = round(float(np.mean(wf_results)),1)
+                std_wf = round(float(np.std(wf_results)),1)
+                st.caption(f"Mean: {avg_wf}% | Std: ±{std_wf}% | "
+                           f"{'Stable' if std_wf<5 else 'Unstable'} across folds")
+
+            # Feature Importance
             if feature_importance:
-                st.markdown("**Top Feature Importances:**")
-                fi_df = pd.DataFrame([
-                    {"Feature": k, "Importance": f"{v:.3f}",
-                     "Bar": "█" * int(v * 50)}
-                    for k, v in feature_importance.items()
-                ])
-                st.dataframe(fi_df, hide_index=True, height=200)
+                st.markdown("**Feature Importance (averaged across models):**")
+                max_imp = max(feature_importance.values()) + 1e-9
+                for feat, imp in feature_importance.items():
+                    bar_w = int(imp / max_imp * 100)
+                    st.markdown(
+                        f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:3px;'>"
+                        f"<div style='min-width:90px;font-size:11px;color:#ccc;'>{feat}</div>"
+                        f"<div style='flex:1;background:#21262d;border-radius:3px;height:8px;'>"
+                        f"<div style='width:{bar_w}%;background:#4e8fff;height:8px;border-radius:3px;'></div>"
+                        f"</div>"
+                        f"<div style='min-width:40px;font-size:11px;color:#888;text-align:right;'>{imp:.3f}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True)
+
+            # LSTM Equity Curve Prediction
+            st.markdown("**LSTM Price Trend Forecast:**")
+            if KERAS_OK and len(df) >= 60:
+                try:
+                    _seq_len = 20
+                    _close   = df["Close"].values.reshape(-1,1)
+                    _scaler2 = MinMaxScaler()
+                    _scaled  = _scaler2.fit_transform(_close)
+
+                    # Build sequences
+                    _Xs, _ys = [], []
+                    for _i in range(_seq_len, len(_scaled)-1):
+                        _Xs.append(_scaled[_i-_seq_len:_i])
+                        _ys.append(_scaled[_i])
+                    _Xs = np.array(_Xs); _ys = np.array(_ys)
+
+                    if len(_Xs) >= 30:
+                        # Build LSTM model
+                        _model = Sequential([
+                            LSTM(50, return_sequences=True,
+                                 input_shape=(_seq_len,1)),
+                            Dropout(0.2),
+                            LSTM(30, return_sequences=False),
+                            Dropout(0.2),
+                            Dense(1)
+                        ])
+                        _model.compile(optimizer="adam", loss="mse")
+                        _es = EarlyStopping(patience=3, restore_best_weights=True)
+                        _model.fit(_Xs[:-5], _ys[:-5], epochs=20,
+                                   batch_size=16, validation_split=0.1,
+                                   callbacks=[_es], verbose=0)
+
+                        # Predict next 5 candles
+                        _last_seq = _scaled[-_seq_len:].reshape(1,_seq_len,1)
+                        _preds_sc = []
+                        _cur_seq  = _last_seq.copy()
+                        for _ in range(5):
+                            _p = _model.predict(_cur_seq, verbose=0)[0][0]
+                            _preds_sc.append(_p)
+                            _cur_seq = np.append(_cur_seq[:,1:,:],
+                                                  [[[_p]]], axis=1)
+                        _preds = _scaler2.inverse_transform(
+                            np.array(_preds_sc).reshape(-1,1)).flatten()
+
+                        _last_price = float(df["Close"].iloc[-1])
+                        _trend      = "UP" if _preds[-1] > _last_price else "DOWN"
+                        _change_pct = (_preds[-1]-_last_price)/_last_price*100
+
+                        tc = "#00b880" if _trend=="UP" else "#e74c3c"
+                        st.markdown(
+                            f"<div style='background:{tc}22;border:1px solid {tc};"
+                            f"border-radius:8px;padding:10px;margin:6px 0;'>"
+                            f"<div style='font-size:13px;font-weight:600;color:{tc};'>"
+                            f"LSTM 5-candle forecast: {_trend} "
+                            f"({_change_pct:+.2f}%)</div>"
+                            f"<div style='font-size:11px;color:#888;margin-top:3px;'>"
+                            + " → ".join([f"Rs.{p:,.1f}" for p in _preds])
+                            + "</div></div>",
+                            unsafe_allow_html=True)
+
+                        if PLOTLY_OK:
+                            _hist = df["Close"].values[-20:]
+                            _hist_x = list(range(len(_hist)))
+                            _pred_x = list(range(len(_hist)-1,
+                                                 len(_hist)+len(_preds)-1))
+                            _lstm_fig = go.Figure()
+                            _lstm_fig.add_trace(go.Scatter(
+                                x=_hist_x, y=_hist,
+                                line=dict(color="#4e8fff", width=2),
+                                name="Historical"))
+                            _lstm_fig.add_trace(go.Scatter(
+                                x=_pred_x, y=_preds,
+                                line=dict(color=tc, width=2, dash="dot"),
+                                name="LSTM Forecast",
+                                mode="lines+markers"))
+                            _lstm_fig.update_layout(
+                                height=180,
+                                plot_bgcolor="#0d1117",
+                                paper_bgcolor="#0d1117",
+                                font=dict(color="#8b949e", size=9),
+                                margin=dict(l=0,r=0,t=10,b=0),
+                                legend=dict(bgcolor="rgba(0,0,0,0)",
+                                           font_size=9),
+                                showlegend=True)
+                            _lstm_fig.update_xaxes(gridcolor="#21262d")
+                            _lstm_fig.update_yaxes(gridcolor="#21262d")
+                            st.plotly_chart(_lstm_fig,
+                                           use_container_width=True,
+                                           config={"displayModeBar":False})
+                except Exception as _le:
+                    st.caption(f"LSTM: {str(_le)[:60]}")
+            elif KERAS_OK:
+                st.caption("Need 60+ candles for LSTM forecast")
+            else:
+                st.caption("Install tensorflow for LSTM: pip install tensorflow")
 
     st.markdown(f"""
 <div style="background:{meter_bg};border:2px solid {meter_color};border-radius:12px;padding:16px 20px;margin-bottom:14px;">
@@ -3011,6 +3261,70 @@ Best: <span style='color:#00b880;'>Rs.{max(pnls):+,.0f}</span><br>
 Worst: <span style='color:#e74c3c;'>Rs.{min(pnls):+,.0f}</span><br>
 Expectancy: Rs.{bt["expectancy"]:+,.2f}/trade
 </div>""",unsafe_allow_html=True)
+
+            # ── TRADE REPLAY ─────────────────────────────────
+            if cl2 and PLOTLY_OK:
+                st.markdown("**Trade Replay — Step through each trade:**")
+                replay_idx = st.slider(
+                    "Select Trade #", 1, max(len(cl2),1),
+                    min(len(cl2),1), key="replay_slider")
+                replay_trade = cl2[min(replay_idx-1, len(cl2)-1)]
+
+                r_buy  = next((t for t in bt.get("trades",[])
+                               if t["type"]=="BUY" and
+                               t["date"] <= replay_trade["date"]), None)
+                r_sell = replay_trade
+
+                rc1,rc2,rc3,rc4,rc5 = st.columns(5)
+                rp = replay_trade.get("pnl",0)
+                rpc= "#00b880" if rp>=0 else "#e74c3c"
+                rc1.markdown(f"<div style='text-align:center;'><div style='font-size:10px;color:#888;'>Entry Date</div><div style='font-size:13px;color:#ccc;'>{r_buy['date'] if r_buy else '—'}</div></div>", unsafe_allow_html=True)
+                rc2.markdown(f"<div style='text-align:center;'><div style='font-size:10px;color:#888;'>Entry Rs.</div><div style='font-size:13px;color:#4e8fff;'>Rs.{r_buy['price'] if r_buy else '—'}</div></div>", unsafe_allow_html=True)
+                rc3.markdown(f"<div style='text-align:center;'><div style='font-size:10px;color:#888;'>Exit Rs.</div><div style='font-size:13px;color:#f39c12;'>Rs.{r_sell['price']}</div></div>", unsafe_allow_html=True)
+                rc4.markdown(f"<div style='text-align:center;'><div style='font-size:10px;color:#888;'>P&L</div><div style='font-size:16px;font-weight:700;color:{rpc};'>Rs.{rp:+,.0f}</div></div>", unsafe_allow_html=True)
+                rc5.markdown(f"<div style='text-align:center;'><div style='font-size:10px;color:#888;'>Exit Reason</div><div style='font-size:13px;color:{'#e74c3c' if r_sell.get('reason')=='SL' else '#00b880'};'>{r_sell.get('reason','—')}</div></div>", unsafe_allow_html=True)
+
+                # Cumulative P&L up to this trade
+                cumulative_pnl = [sum(t["pnl"] for t in cl2[:i+1])
+                                   for i in range(len(cl2))]
+                replay_fig = go.Figure()
+                bar_colors = ["#00b880" if p>=0 else "#e74c3c"
+                              for p in [t["pnl"] for t in cl2]]
+                replay_fig.add_trace(go.Bar(
+                    x=list(range(1,len(cl2)+1)),
+                    y=[t["pnl"] for t in cl2],
+                    marker_color=bar_colors,
+                    name="Trade P&L",
+                    opacity=0.7))
+                replay_fig.add_trace(go.Scatter(
+                    x=list(range(1,len(cl2)+1)),
+                    y=cumulative_pnl,
+                    line=dict(color="#f39c12",width=2),
+                    name="Cumulative P&L",
+                    yaxis="y2"))
+                # Highlight selected trade
+                replay_fig.add_vline(
+                    x=replay_idx,
+                    line_color="#fff", line_dash="dot",
+                    line_width=1)
+                replay_fig.update_layout(
+                    height=220,
+                    plot_bgcolor="#0d1117",
+                    paper_bgcolor="#0d1117",
+                    font=dict(color="#8b949e",size=9),
+                    yaxis2=dict(overlaying="y",side="right",
+                                gridcolor="#21262d"),
+                    legend=dict(bgcolor="rgba(0,0,0,0)",
+                               orientation="h",y=1.05),
+                    margin=dict(l=0,r=0,t=10,b=0),
+                    barmode="relative")
+                replay_fig.update_xaxes(gridcolor="#21262d",
+                    title="Trade #")
+                replay_fig.update_yaxes(gridcolor="#21262d",
+                    title="P&L (Rs.)")
+                replay_fig.add_hline(y=0, line_color="#555")
+                st.plotly_chart(replay_fig, use_container_width=True,
+                               config={"displayModeBar":False})
 
 except Exception as e:
     st.warning(f"Backtesting issue: {e}")
