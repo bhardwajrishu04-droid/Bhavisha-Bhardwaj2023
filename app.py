@@ -1973,6 +1973,61 @@ def portfolio_risk_check(paper_balance: float, paper_positions: dict,
     }
 
 
+
+# ── CORRELATION FILTER ────────────────────────────────────────
+@st.cache_data(ttl=600, show_spinner=False)
+def get_correlation_filter(_stock: str, universe: tuple) -> dict:
+    """
+    Correlation filter — avoid trading stocks moving together.
+    High correlation = same risk, no diversification.
+    """
+    import yfinance as yf2
+    try:
+        syms = list(universe[:8]) + [_stock]
+        syms = list(dict.fromkeys(syms))  # deduplicate
+        prices = {}
+        for s in syms:
+            try:
+                d = yf2.Ticker(s).history(period="1mo", interval="1d")
+                if not d.empty and len(d) >= 15:
+                    prices[s.replace(".NS","")] = d["Close"].pct_change().dropna().values[-15:]
+            except Exception:
+                continue
+        if len(prices) < 2:
+            return {"status": "insufficient_data", "correlations": {}}
+
+        import numpy as np
+        stock_sym = _stock.replace(".NS","")
+        if stock_sym not in prices:
+            return {"status": "no_data", "correlations": {}}
+
+        stock_ret = prices[stock_sym]
+        corrs = {}
+        for sym, ret in prices.items():
+            if sym == stock_sym: continue
+            try:
+                min_len = min(len(stock_ret), len(ret))
+                c = float(np.corrcoef(stock_ret[:min_len], ret[:min_len])[0,1])
+                corrs[sym] = round(c, 3)
+            except Exception:
+                continue
+
+        high_corr = {s:c for s,c in corrs.items() if abs(c) >= 0.75}
+        low_corr  = {s:c for s,c in corrs.items() if abs(c) < 0.40}
+        avg_corr  = round(float(sum(abs(v) for v in corrs.values()) / max(len(corrs),1)), 3)
+
+        return {
+            "status":      "ok",
+            "correlations": corrs,
+            "high_corr":   high_corr,
+            "low_corr":    low_corr,
+            "avg_corr":    avg_corr,
+            "warning":     len(high_corr) >= 2,
+            "rec":         "HIGH correlation — reduce position size" if len(high_corr)>=2 else "Correlation normal — OK to trade",
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "correlations": {}}
+
 # =============================================================
 # MAIN DASHBOARD
 # =============================================================
@@ -3742,6 +3797,47 @@ Bull TFs: {mtf.get("bull_count",0)} | Bear TFs: {mtf.get("bear_count",0)} | Tota
 """)
         else:
             st.info("Click 'Load MTF Analysis' to compare all timeframes")
+
+        # Correlation Filter
+        st.markdown("---")
+        st.markdown("#### Correlation Filter")
+        try:
+            all_stocks = [s for lst in list(STOCKS.values())[:2] for s in lst]
+            with st.spinner("Checking correlations..."):
+                corr_data = get_correlation_filter(stock, tuple(all_stocks[:8]))
+            if corr_data.get("status") == "ok":
+                corr_c = "#e74c3c" if corr_data["warning"] else "#00b880"
+                st.markdown(f"""<div style='background:{corr_c}22;border:2px solid {corr_c};
+border-radius:10px;padding:12px;margin-bottom:10px;'>
+<div style='font-size:14px;font-weight:700;color:{corr_c};'>{corr_data["rec"]}</div>
+<div style='font-size:11px;color:#888;margin-top:4px;'>
+Avg correlation: {corr_data["avg_corr"]} | High corr stocks: {len(corr_data["high_corr"])}
+</div></div>""", unsafe_allow_html=True)
+
+                corr_cols = st.columns(2)
+                with corr_cols[0]:
+                    st.markdown("**High Correlation (avoid same trade):**")
+                    for sym, c in sorted(corr_data["high_corr"].items(), key=lambda x:-abs(x[1])):
+                        cc2 = "#e74c3c" if c>0 else "#a78bfa"
+                        st.markdown(f"""<div style='background:#161b22;border-left:3px solid {cc2};
+border-radius:4px;padding:5px 10px;margin-bottom:3px;font-size:12px;
+display:flex;justify-content:space-between;'>
+<span style='color:#ccc;'>{sym}</span>
+<span style='color:{cc2};font-weight:600;'>{c:+.2f}</span>
+</div>""", unsafe_allow_html=True)
+                    if not corr_data["high_corr"]:
+                        st.success("No highly correlated stocks")
+
+                with corr_cols[1]:
+                    st.markdown("**All Correlations:**")
+                    for sym, c in sorted(corr_data["correlations"].items(), key=lambda x:-abs(x[1]))[:6]:
+                        cc3="#e74c3c" if c>0.6 else ("#00b880" if c<0 else "#888")
+                        st.markdown(f"""<div style='display:flex;justify-content:space-between;
+background:#161b22;border-radius:4px;padding:4px 8px;margin-bottom:2px;font-size:11px;'>
+<span style='color:#ccc;'>{sym}</span><span style='color:{cc3};'>{c:+.2f}</span>
+</div>""", unsafe_allow_html=True)
+        except Exception as _cr:
+            st.caption(f"Correlation: {str(_cr)[:50]}")
 
         # Portfolio Risk Check
         st.markdown("---")
