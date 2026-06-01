@@ -1383,6 +1383,597 @@ def kelly_sizing(win_rate, rr_ratio, capital, max_risk_pct=0.20):
     }
 
 
+
+# =============================================================
+# PROFESSIONAL TRADING ENGINE v3.0
+# ICT + Market Structure + Chart Patterns + Institutional Logic
+# =============================================================
+
+# ── 1. EQUAL HIGHS / EQUAL LOWS (EQH/EQL) ───────────────────
+def detect_equal_levels(df, tolerance=0.002):
+    """EQH/EQL — liquidity pools above equal highs / below equal lows."""
+    if len(df) < 20: return {}
+    highs  = df["High"].values[-50:]
+    lows   = df["Low"].values[-50:]
+    closes = df["Close"].values
+    price  = float(closes[-1])
+    atr    = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else price*0.01
+
+    eqh_levels, eql_levels = [], []
+    # Find clusters of highs within tolerance
+    for i in range(len(highs)):
+        cluster = [highs[j] for j in range(len(highs)) if abs(highs[j]-highs[i])/highs[i] < tolerance and i != j]
+        if len(cluster) >= 1:
+            avg = (highs[i] + sum(cluster))/( 1+len(cluster))
+            eqh_levels.append(round(avg, 2))
+    for i in range(len(lows)):
+        cluster = [lows[j] for j in range(len(lows)) if abs(lows[j]-lows[i])/lows[i] < tolerance and i != j]
+        if len(cluster) >= 1:
+            avg = (lows[i] + sum(cluster))/(1+len(cluster))
+            eql_levels.append(round(avg, 2))
+
+    # Deduplicate
+    eqh = sorted(set([round(l/atr)*atr for l in eqh_levels]), reverse=True)[:3]
+    eql = sorted(set([round(l/atr)*atr for l in eql_levels]))[:3]
+
+    nearest_eqh = min(eqh, key=lambda x:abs(x-price)) if eqh else None
+    nearest_eql = min(eql, key=lambda x:abs(x-price)) if eql else None
+
+    return {
+        "eqh": [round(v,2) for v in eqh],
+        "eql": [round(v,2) for v in eql],
+        "nearest_eqh": round(nearest_eqh,2) if nearest_eqh else None,
+        "nearest_eql": round(nearest_eql,2) if nearest_eql else None,
+        "near_eqh": nearest_eqh and abs(nearest_eqh-price)/price < 0.005,
+        "near_eql": nearest_eql and abs(nearest_eql-price)/price < 0.005,
+    }
+
+
+# ── 2. LIQUIDITY SWEEP (Proper) ──────────────────────────────
+def detect_liquidity_sweep(df):
+    """Proper liquidity sweep: wick beyond EQH/EQL then closes back."""
+    if len(df) < 20: return []
+    atr    = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 5
+    price  = float(df["Close"].iloc[-1])
+    eq     = detect_equal_levels(df)
+    results = []
+
+    for i in range(1, min(10, len(df))):
+        h = float(df["High"].iloc[-i])
+        l = float(df["Low"].iloc[-i])
+        c = float(df["Close"].iloc[-i])
+        o = float(df["Open"].iloc[-i])
+        date = str(df.index[-i])[:10]
+
+        # Bullish sweep: wick below EQL then closes above (stop hunt below lows)
+        for eql in eq.get("eql", []):
+            if l < eql - atr*0.1 and c > eql + atr*0.15:
+                results.append({
+                    "type":   "Bullish Liquidity Sweep",
+                    "color":  "#00b880",
+                    "signal": "BUY",
+                    "swept":  round(eql, 2),
+                    "desc":   f"Stop hunt below EQL Rs.{eql:.2f} — Smart money accumulated. Reversal up.",
+                    "date":   date,
+                })
+                break
+
+        # Bearish sweep: wick above EQH then closes below (stop hunt above highs)
+        for eqh in eq.get("eqh", []):
+            if h > eqh + atr*0.1 and c < eqh - atr*0.15:
+                results.append({
+                    "type":   "Bearish Liquidity Sweep",
+                    "color":  "#e74c3c",
+                    "signal": "SELL",
+                    "swept":  round(eqh, 2),
+                    "desc":   f"Stop hunt above EQH Rs.{eqh:.2f} — Smart money distributed. Reversal down.",
+                    "date":   date,
+                })
+                break
+
+    return results[:3]
+
+
+# ── 3. BOS & CHOCH ENGINE ────────────────────────────────────
+def detect_bos_choch(df, n=5):
+    """
+    BOS  = Break of Structure (trend continuation)
+    CHOCH = Change of Character (trend reversal signal)
+    """
+    if len(df) < n*4: return {}
+    highs  = df["High"].values
+    lows   = df["Low"].values
+    closes = df["Close"].values
+    atr    = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 5
+
+    # Swing points
+    sh, sl = [], []
+    for i in range(n, len(df)-n):
+        if all(highs[i]>=highs[max(0,i-n):i]) and all(highs[i]>=highs[i+1:i+n+1]):
+            sh.append((i, highs[i]))
+        if all(lows[i] <=lows[max(0,i-n):i])  and all(lows[i] <=lows[i+1:i+n+1]):
+            sl.append((i, lows[i]))
+
+    if len(sh) < 2 or len(sl) < 2:
+        return {"bos": None, "choch": None, "trend": "Unknown"}
+
+    price = float(closes[-1])
+    last_sh = sh[-1][1]; prev_sh = sh[-2][1]
+    last_sl = sl[-1][1]; prev_sl = sl[-2][1]
+
+    bos   = None
+    choch = None
+
+    # Current trend
+    trend = "Uptrend" if (last_sh > prev_sh and last_sl > prev_sl) else             "Downtrend" if (last_sh < prev_sh and last_sl < prev_sl) else "Ranging"
+
+    # BOS: Break of Structure — continuation
+    if trend == "Uptrend" and price > last_sh + atr*0.2:
+        bos = {"direction": "BULLISH BOS", "level": round(last_sh,2),
+               "desc": f"Price broke above swing high Rs.{last_sh:.2f} — Uptrend continues",
+               "color": "#00b880"}
+    elif trend == "Downtrend" and price < last_sl - atr*0.2:
+        bos = {"direction": "BEARISH BOS", "level": round(last_sl,2),
+               "desc": f"Price broke below swing low Rs.{last_sl:.2f} — Downtrend continues",
+               "color": "#e74c3c"}
+
+    # CHOCH: Change of Character — reversal warning
+    if trend == "Downtrend" and price > last_sh + atr*0.3:
+        choch = {"direction": "BULLISH CHOCH", "level": round(last_sh,2),
+                 "desc": f"Downtrend broken — price above Rs.{last_sh:.2f}. Possible reversal UP.",
+                 "color": "#00e5a0"}
+    elif trend == "Uptrend" and price < last_sl - atr*0.3:
+        choch = {"direction": "BEARISH CHOCH", "level": round(last_sl,2),
+                 "desc": f"Uptrend broken — price below Rs.{last_sl:.2f}. Possible reversal DOWN.",
+                 "color": "#ff6b6b"}
+
+    return {
+        "bos": bos, "choch": choch, "trend": trend,
+        "last_sh": round(last_sh,2), "last_sl": round(last_sl,2),
+        "prev_sh": round(prev_sh,2), "prev_sl": round(prev_sl,2),
+    }
+
+
+# ── 4. PREMIUM / DISCOUNT ZONES ──────────────────────────────
+def get_premium_discount(df):
+    """ICT Premium/Discount + Equilibrium zone."""
+    price = float(df["Close"].iloc[-1])
+    high  = float(df["High"].rolling(20).max().iloc[-1])
+    low   = float(df["Low"].rolling(20).min().iloc[-1])
+    rng   = high - low + 1e-9
+    mid   = (high + low) / 2
+    pct   = (price - low) / rng * 100
+
+    if   pct >= 75: zone = "Extreme Premium"; zcol = "#e74c3c"; rec = "SELL — Overvalued"
+    elif pct >= 55: zone = "Premium";         zcol = "#e07b39"; rec = "SELL/WAIT"
+    elif pct >= 45: zone = "Equilibrium";     zcol = "#f39c12"; rec = "NEUTRAL — No edge"
+    elif pct >= 25: zone = "Discount";        zcol = "#27ae60"; rec = "BUY/WATCH"
+    else:           zone = "Extreme Discount";zcol = "#00b880"; rec = "BUY — Undervalued"
+
+    return {
+        "zone": zone, "color": zcol, "recommendation": rec,
+        "pct": round(pct, 1), "price": round(price, 2),
+        "high": round(high, 2), "low": round(low, 2), "mid": round(mid, 2),
+        "premium_start": round(low + rng*0.55, 2),
+        "discount_end":  round(low + rng*0.45, 2),
+        "extreme_prem":  round(low + rng*0.75, 2),
+        "extreme_disc":  round(low + rng*0.25, 2),
+    }
+
+
+# ── 5. KILL ZONES (London / NY / Asia) ───────────────────────
+def get_kill_zones():
+    """ICT Kill Zones with Indian market mapping."""
+    now_t = now_ist().strftime("%H:%M")
+    zones = [
+        ("09:15","10:30","Opening Kill Zone",   "#ffa94d","NSE open — high vol, institutional orders"),
+        ("10:30","11:30","Asian Close / Overlap","#a78bfa","Asian session closing liquidity"),
+        ("11:00","13:00","London Open (Equiv)",  "#4e8fff","European market impact on Indian stocks"),
+        ("13:00","14:00","Lunch Lull",           "#555555","Low volume — avoid trading"),
+        ("14:00","15:00","NY Pre-Open (Equiv)",  "#00e5a0","US futures affect Indian indices"),
+        ("15:00","15:30","Power Hour / Closing", "#e74c3c","Final moves — high reversals"),
+    ]
+    active = None
+    for start,end,name,color,desc in zones:
+        if start <= now_t <= end:
+            active = {"name":name,"color":color,"desc":desc,"start":start,"end":end}
+            break
+    return {"zones": zones, "active": active, "current_time": now_t}
+
+
+# ── 6. CHART PATTERNS ────────────────────────────────────────
+def detect_chart_patterns(df):
+    """All major chart patterns with targets."""
+    if len(df) < 25: return []
+    closes = df["Close"].values
+    highs  = df["High"].values
+    lows   = df["Low"].values
+    atr    = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else float(np.std(closes[-20:]))
+    n      = len(closes)
+    patterns = []
+    date = str(df.index[-1])[:10]
+
+    def add(name, typ, strength, signal, desc, target=None):
+        patterns.append({"pattern":name,"type":typ,"strength":strength,
+                         "signal":signal,"desc":desc,"target":target,"date":date})
+
+    # ── DOUBLE TOP ───────────────────────────────────────────
+    for i in range(8, n-6):
+        for j in range(i+6, min(i+20, n-2)):
+            p1 = max(highs[max(0,i-4):i+4]); p2 = max(highs[j-4:j+4])
+            valley = min(closes[i:j])
+            if abs(p1-p2)/p1 < 0.012 and valley < p1*0.975 and closes[-1] < valley+atr:
+                neckline = round(valley, 2); target = round(valley-(p1-valley),2)
+                add("Double Top","bearish",4,"SELL",
+                    f"Two peaks ~Rs.{round(p1,0)} | Neckline Rs.{neckline}",target); break
+        else: continue; break
+
+    # ── DOUBLE BOTTOM ────────────────────────────────────────
+    for i in range(8, n-6):
+        for j in range(i+6, min(i+20, n-2)):
+            t1 = min(lows[max(0,i-4):i+4]); t2 = min(lows[j-4:j+4])
+            peak = max(closes[i:j])
+            if abs(t1-t2)/t1 < 0.012 and peak > t1*1.025 and closes[-1] > peak-atr:
+                neckline = round(peak,2); target = round(peak+(peak-t1),2)
+                add("Double Bottom","bullish",4,"BUY",
+                    f"Two bottoms ~Rs.{round(t1,0)} | Neckline Rs.{neckline}",target); break
+        else: continue; break
+
+    # ── HEAD & SHOULDERS ─────────────────────────────────────
+    if n >= 35:
+        seg_h = highs[-35:]
+        pivots = [(i,seg_h[i]) for i in range(3,len(seg_h)-3)
+                  if seg_h[i]==max(seg_h[max(0,i-3):i+4])]
+        if len(pivots) >= 3:
+            ls,hd,rs = pivots[-3],pivots[-2],pivots[-1]
+            if hd[1]>ls[1]*1.01 and hd[1]>rs[1]*1.01 and abs(ls[1]-rs[1])/ls[1]<0.04:
+                neck = float(min(lows[-35:][ls[0]:rs[0]]))
+                add("Head & Shoulders","bearish",5,"STRONG SELL",
+                    f"Head Rs.{round(hd[1],0)} | Neckline Rs.{round(neck,0)}",
+                    round(neck-(hd[1]-neck),2))
+
+    # ── INVERSE H&S ──────────────────────────────────────────
+    if n >= 35:
+        seg_l = lows[-35:]
+        pivots = [(i,seg_l[i]) for i in range(3,len(seg_l)-3)
+                  if seg_l[i]==min(seg_l[max(0,i-3):i+4])]
+        if len(pivots) >= 3:
+            ls,hd,rs = pivots[-3],pivots[-2],pivots[-1]
+            if hd[1]<ls[1]*0.99 and hd[1]<rs[1]*0.99 and abs(ls[1]-rs[1])/ls[1]<0.04:
+                neck = float(max(highs[-35:][ls[0]:rs[0]]))
+                add("Inverse H&S","bullish",5,"STRONG BUY",
+                    f"Head Rs.{round(hd[1],0)} | Neckline Rs.{round(neck,0)}",
+                    round(neck+(neck-hd[1]),2))
+
+    # ── ASCENDING TRIANGLE ───────────────────────────────────
+    last_h = highs[-25:]; last_l = lows[-25:]
+    h_rng = float(max(last_h)-min(last_h)); l_rng = float(max(last_l)-min(last_l))
+    if h_rng < atr*1.5 and l_rng > atr*3:
+        add("Ascending Triangle","bullish",4,"BUY on breakout",
+            f"Flat resistance Rs.{round(max(last_h),0)} + Rising lows",
+            round(float(max(last_h))+h_rng*1.5,2))
+
+    # ── DESCENDING TRIANGLE ──────────────────────────────────
+    elif l_rng < atr*1.5 and h_rng > atr*3:
+        add("Descending Triangle","bearish",4,"SELL on breakdown",
+            f"Flat support Rs.{round(min(last_l),0)} + Falling highs",
+            round(float(min(last_l))-h_rng*1.5,2))
+
+    # ── SYMMETRICAL TRIANGLE ─────────────────────────────────
+    elif h_rng < atr*2.5 and l_rng < atr*2.5 and n>20:
+        add("Symmetrical Triangle","neutral",3,"WAIT — Breakout coming",
+            f"Converging range — Big move expected soon",None)
+
+    # ── BULL FLAG ────────────────────────────────────────────
+    if n>=25:
+        pole   = float(closes[-20])-float(closes[-25]) if n>=25 else 0
+        consol = float(max(highs[-8:]))-float(min(lows[-8:]))
+        if pole > atr*3 and consol < atr*1.5:
+            add("Bull Flag","bullish",4,"BUY — continuation",
+                f"Strong pole up Rs.{round(abs(pole),0)} + tight flag",
+                round(float(closes[-1])+abs(pole),2))
+
+    # ── BEAR FLAG ────────────────────────────────────────────
+    if n>=25:
+        pole   = float(closes[-25])-float(closes[-20]) if n>=25 else 0
+        consol = float(max(highs[-8:]))-float(min(lows[-8:]))
+        if pole > atr*3 and consol < atr*1.5 and float(closes[-1])<float(closes[-5]):
+            add("Bear Flag","bearish",4,"SELL — continuation",
+                f"Strong pole down Rs.{round(abs(pole),0)} + tight flag",
+                round(float(closes[-1])-abs(pole),2))
+
+    # ── PENNANT ──────────────────────────────────────────────
+    if n>=15:
+        early_rng = float(max(highs[-15:-8]))-float(min(lows[-15:-8]))
+        late_rng  = float(max(highs[-7:]))-float(min(lows[-7:]))
+        if late_rng < early_rng*0.5 and early_rng > atr*2:
+            direction = "bullish" if float(closes[-1])>float(closes[-15]) else "bearish"
+            add("Pennant",direction,4,
+                "BUY on breakout" if direction=="bullish" else "SELL on breakdown",
+                f"Converging pennant after strong move",None)
+
+    return sorted(patterns, key=lambda x:-x["strength"])
+
+
+# ── 7. FIBONACCI ─────────────────────────────────────────────
+def get_fibonacci_levels(df, lookback=50):
+    recent = df.tail(lookback)
+    high   = float(recent["High"].max())
+    low    = float(recent["Low"].min())
+    diff   = high - low + 1e-9
+    price  = float(df["Close"].iloc[-1])
+    levels = {
+        "0% (High)":       round(high,2),
+        "23.6%":           round(high-0.236*diff,2),
+        "38.2%":           round(high-0.382*diff,2),
+        "50%  (Mid)":      round(high-0.500*diff,2),
+        "61.8% (Golden)":  round(high-0.618*diff,2),
+        "78.6%":           round(high-0.786*diff,2),
+        "100% (Low)":      round(low,2),
+        "127.2% (Ext)":    round(low-0.272*diff,2),
+        "161.8% (Ext)":    round(low-0.618*diff,2),
+    }
+    nearest = min(levels.items(), key=lambda x:abs(x[1]-price))
+    in_gz   = (high-0.618*diff) <= price <= (high-0.382*diff)
+    return {
+        "levels": levels, "high":round(high,2), "low":round(low,2),
+        "current": round(price,2), "nearest_level": nearest[0],
+        "nearest_price": nearest[1], "in_golden_zone": in_gz,
+        "golden_top": round(high-0.382*diff,2),
+        "golden_bot": round(high-0.618*diff,2),
+    }
+
+
+# ── 8. TRENDLINE ─────────────────────────────────────────────
+def detect_trendlines(df, n=5):
+    if len(df)<20: return {}
+    highs=df["High"].values; lows=df["Low"].values; closes=df["Close"].values
+    atr=float(df["ATR"].iloc[-1]) if "ATR" in df.columns else 5
+    ph=[]; pl=[]
+    for i in range(n,len(df)-n):
+        if all(highs[i]>=highs[max(0,i-n):i]) and all(highs[i]>=highs[i+1:i+n+1]):
+            ph.append((i,highs[i]))
+        if all(lows[i]<=lows[max(0,i-n):i]) and all(lows[i]<=lows[i+1:i+n+1]):
+            pl.append((i,lows[i]))
+    result={"resistance":None,"support":None,"signal":"Insufficient data"}
+    if len(ph)>=2:
+        (x1,y1),(x2,y2)=ph[-2],ph[-1]
+        if x2!=x1:
+            sl=(y2-y1)/(x2-x1); cur_idx=len(df)-1
+            rp=round(y1+sl*(cur_idx-x1),2)
+            touches=sum(1 for i,h in ph if abs(h-(y1+sl*(i-x1)))<atr*0.5)
+            result["resistance"]={"price":rp,"slope":round(sl,4),
+                "direction":"Falling" if sl<0 else "Rising",
+                "touches":touches,"broken":float(closes[-1])>rp+atr*0.3}
+    if len(pl)>=2:
+        (x1,y1),(x2,y2)=pl[-2],pl[-1]
+        if x2!=x1:
+            sl=(y2-y1)/(x2-x1); cur_idx=len(df)-1
+            sp=round(y1+sl*(cur_idx-x1),2)
+            touches=sum(1 for i,l in pl if abs(l-(y1+sl*(i-x1)))<atr*0.5)
+            result["support"]={"price":sp,"slope":round(sl,4),
+                "direction":"Rising" if sl>0 else "Falling",
+                "touches":touches,"broken":float(closes[-1])<sp-atr*0.3}
+    r=result.get("resistance"); s=result.get("support")
+    if r and r.get("broken"):      result["signal"]="BULLISH BREAKOUT — above resistance"
+    elif s and s.get("broken"):    result["signal"]="BEARISH BREAKDOWN — below support"
+    elif r and s:
+        if r["slope"]>0 and s["slope"]>0: result["signal"]="Rising Channel — BUY at support"
+        elif r["slope"]<0 and s["slope"]<0: result["signal"]="Falling Channel — SELL at resistance"
+        else: result["signal"]="Triangle — Breakout imminent"
+    return result
+
+
+# ── 9. MULTI-TIMEFRAME CONFLUENCE ────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def get_mtf_confluence(_stock: str) -> dict:
+    """
+    Multi-timeframe analysis: 5m + 15m + 1H + 4H (daily as proxy)
+    Returns confluence score 0-100.
+    """
+    import yfinance as yf2
+    timeframes = {
+        "5m":  ("1d",  "5m"),
+        "15m": ("5d",  "15m"),
+        "1H":  ("1mo", "1h"),
+        "4H":  ("3mo", "1d"),
+    }
+    results = {}
+    for tf_name, (period, interval) in timeframes.items():
+        try:
+            d = yf2.Ticker(_stock).history(period=period, interval=interval)
+            if d is None or d.empty or len(d)<15: continue
+            last = d.iloc[-1]
+            price= float(last["Close"])
+            ema20= float(d["Close"].ewm(20).mean().iloc[-1])
+            ema50= float(d["Close"].ewm(50).mean().iloc[-1])
+            delta= d["Close"].diff()
+            rsi_val = 100-(100/(1+(delta.where(delta>0,0).rolling(14).mean()/
+                              (-delta.where(delta<0,0)).rolling(14).mean().replace(0,1e-9)).iloc[-1]))
+            macd_v = float(d["Close"].ewm(12).mean().iloc[-1]-d["Close"].ewm(26).mean().iloc[-1])
+            macd_s = float(d["Close"].ewm(12).mean().ewm(9).mean().iloc[-1]) if len(d)>30 else 0
+            vr     = float(d["Volume"].iloc[-1]/(d["Volume"].rolling(20).mean().iloc[-1]+1e-9))
+
+            score = sum([price>ema20, price>ema50, ema20>ema50,
+                         40<rsi_val<72, macd_v>macd_s, vr>1.0])
+            direction = "BULLISH" if score>=4 else ("BEARISH" if score<=2 else "NEUTRAL")
+            results[tf_name] = {
+                "score": score, "max": 6,
+                "pct": round(score/6*100),
+                "direction": direction,
+                "rsi": round(float(rsi_val),1),
+                "price": round(price,2),
+            }
+        except Exception:
+            continue
+
+    if not results: return {"confluence": 50, "signal": "No data", "breakdown": {}}
+
+    avg_pct = round(sum(r["pct"] for r in results.values())/len(results))
+    bull_tfs = [tf for tf,r in results.items() if r["direction"]=="BULLISH"]
+    bear_tfs = [tf for tf,r in results.items() if r["direction"]=="BEARISH"]
+
+    if len(bull_tfs)>=3:   signal = "STRONG BUY — All TFs aligned"
+    elif len(bull_tfs)==2: signal = "BUY — Most TFs bullish"
+    elif len(bear_tfs)>=3: signal = "STRONG SELL — All TFs aligned"
+    elif len(bear_tfs)==2: signal = "SELL — Most TFs bearish"
+    else:                  signal = "MIXED — Wait for alignment"
+
+    return {"confluence": avg_pct, "signal": signal,
+            "breakdown": results, "bull_count": len(bull_tfs),
+            "bear_count": len(bear_tfs)}
+
+
+# ── 10. INSTITUTIONAL SCORE ENGINE ───────────────────────────
+def get_institutional_score(df, stock: str) -> dict:
+    """
+    Institutional-grade composite score (0-100).
+    Checks: Volume, OB zones, FVG, Liquidity, Structure, Momentum
+    """
+    if len(df) < 20: return {"score": 50, "grade": "C", "label": "Neutral"}
+    price = float(df["Close"].iloc[-1])
+    atr   = float(df["ATR"].iloc[-1]) if "ATR" in df.columns else price*0.01
+
+    scores = {}
+
+    # 1. Volume Intelligence (0-20)
+    vr = float(df["Vol_Ratio"].iloc[-1]) if "Vol_Ratio" in df.columns else 1
+    obv_trend = 1 if len(df)>20 and float(df.get("OBV", df["Volume"]).iloc[-1]) > float(df.get("OBV",df["Volume"]).iloc[-10]) else 0
+    scores["volume"] = min(20, int(vr*8 + obv_trend*5))
+
+    # 2. Trend Alignment (0-20)
+    ema9  = float(df.get("EMA9",  df["Close"]).iloc[-1])
+    ema20 = float(df.get("EMA20", df["Close"]).iloc[-1])
+    ema50 = float(df.get("EMA50", df["Close"]).iloc[-1])
+    st_dir= float(df.get("ST_Dir", pd.Series([0])).iloc[-1])
+    adx   = float(df.get("ADX",   pd.Series([15])).iloc[-1])
+    trend_score = sum([price>ema9, price>ema20, price>ema50,
+                       ema9>ema20, ema20>ema50, st_dir>0, adx>25])
+    scores["trend"] = min(20, int(trend_score/7*20))
+
+    # 3. Momentum Quality (0-20)
+    rsi  = float(df.get("RSI", pd.Series([50])).iloc[-1])
+    mfi  = float(df.get("MFI", pd.Series([50])).iloc[-1])
+    macd = float(df.get("MACD", pd.Series([0])).iloc[-1])
+    macs = float(df.get("MACD_Signal", pd.Series([0])).iloc[-1])
+    mh   = float(df.get("MACD_Hist", pd.Series([0])).iloc[-1])
+    mom  = sum([45<rsi<72, mfi>55, macd>macs, mh>0, rsi>50])
+    scores["momentum"] = min(20, int(mom/5*20))
+
+    # 4. SMC Quality (0-20)
+    try:
+        bos_r = detect_bos_choch(df)
+        fvg_r = [f for f in (detect_fvg_simple(df) or []) if f["type"]=="Bullish FVG"]
+        eq_r  = detect_equal_levels(df)
+        smc   = sum([bos_r.get("trend")=="Uptrend",
+                     len(fvg_r)>0,
+                     eq_r.get("near_eql",False)])
+        scores["smc"] = min(20, int(smc/3*20))
+    except Exception:
+        scores["smc"] = 10
+
+    # 5. Risk/Reward Quality (0-20)
+    bb_pct = float(df.get("BB_Pct", pd.Series([0.5])).iloc[-1])
+    pd_r   = get_premium_discount(df)
+    rr_ok  = "Discount" in pd_r.get("zone","")
+    scores["risk"] = min(20, int((1-bb_pct)*10 + rr_ok*10))
+
+    total = sum(scores.values())
+    if   total >= 80: grade,label = "A+","Institutional BUY"
+    elif total >= 65: grade,label = "A", "Strong BUY"
+    elif total >= 50: grade,label = "B", "Moderate BUY"
+    elif total >= 35: grade,label = "C", "Neutral/Wait"
+    elif total >= 20: grade,label = "D", "SELL/Avoid"
+    else:             grade,label = "F", "Strong SELL"
+
+    return {
+        "score": total, "grade": grade, "label": label,
+        "breakdown": scores,
+        "color": "#00b880" if total>=65 else ("#f39c12" if total>=35 else "#e74c3c"),
+    }
+
+
+def detect_fvg_simple(df):
+    """Quick FVG for institutional score."""
+    if len(df)<5: return []
+    fvgs=[]
+    for i in range(1,min(20,len(df)-1)):
+        h1=float(df["High"].iloc[i-1]); l2=float(df["Low"].iloc[i+1])
+        if l2>h1: fvgs.append({"type":"Bullish FVG"})
+    return fvgs
+
+
+# ── 11. DYNAMIC ATR POSITION SIZING ──────────────────────────
+def dynamic_position_size(price, atr, capital, risk_pct,
+                           inst_score=50, win_rate=50) -> dict:
+    """
+    Dynamic sizing: Base ATR * Institutional Score scaling.
+    Higher conviction = slightly larger size.
+    """
+    # Base risk
+    risk_amount = capital * (risk_pct/100)
+    sl_dist     = atr * 1.5
+
+    # Conviction multiplier (0.5x to 1.5x based on score)
+    conviction = 0.5 + (inst_score/100)   # 0.5 to 1.5
+    kelly_pct  = max(0.5, min(3.0, risk_pct * conviction))
+    adj_risk   = capital * (kelly_pct/100)
+
+    base_qty   = max(1, int(risk_amount / sl_dist))
+    adj_qty    = max(1, int(adj_risk    / sl_dist))
+
+    max_qty    = max(1, int(capital * 0.20 / price))  # 20% max per trade
+    final_qty  = min(adj_qty, max_qty)
+
+    return {
+        "base_qty":    base_qty,
+        "adj_qty":     final_qty,
+        "sl_dist":     round(sl_dist,2),
+        "stop_loss":   round(price - sl_dist, 2),
+        "target_2r":   round(price + sl_dist*2, 2),
+        "target_3r":   round(price + sl_dist*3, 2),
+        "risk_amount": round(risk_amount, 0),
+        "max_loss":    round(sl_dist * final_qty, 0),
+        "max_gain_2r": round(sl_dist * final_qty * 2, 0),
+        "max_gain_3r": round(sl_dist * final_qty * 3, 0),
+        "conviction":  round(conviction, 2),
+        "kelly_pct":   round(kelly_pct, 2),
+    }
+
+
+# ── 12. PORTFOLIO RISK CONTROL ────────────────────────────────
+def portfolio_risk_check(paper_balance: float, paper_positions: dict,
+                          new_trade_risk: float) -> dict:
+    """Check if new trade violates portfolio risk rules."""
+    total_exposed = sum(p.get("qty",0)*p.get("price",0)
+                        for p in paper_positions.values())
+    exposure_pct  = total_exposed / (paper_balance+total_exposed+1e-9) * 100
+    positions_cnt = len(paper_positions)
+    daily_limit   = paper_balance * 0.03  # 3% daily loss limit
+
+    warnings = []
+    can_trade = True
+
+    if exposure_pct > 80:
+        warnings.append("Portfolio >80% exposed — high risk!")
+        can_trade = False
+    if positions_cnt >= 5:
+        warnings.append("Max 5 concurrent positions reached")
+        can_trade = False
+    if new_trade_risk > paper_balance * 0.02:
+        warnings.append("Single trade risk >2% of capital")
+        can_trade = False
+
+    return {
+        "can_trade":    can_trade,
+        "exposure_pct": round(exposure_pct, 1),
+        "positions":    positions_cnt,
+        "warnings":     warnings,
+        "status":       "OK" if can_trade else "BLOCKED",
+        "color":        "#00b880" if can_trade else "#e74c3c",
+    }
+
+
 # =============================================================
 # MAIN DASHBOARD
 # =============================================================
@@ -2519,7 +3110,14 @@ Unrealised: <b style="color:{color}">₹{open_pnl:+.2f}</b>
     # CANDLESTICK PATTERNS + TA ANALYSIS TABS
     # =============================================================
     st.markdown("---")
-    tab_candle, tab_ta = st.tabs(["Candlestick Patterns", "Technical Analysis Summary"])
+    tab_candle, tab_ta, tab_struct, tab_pat, tab_ict2, tab_mtf = st.tabs([
+        "Candles + TA",
+        "Fibonacci + Trendline",
+        "Market Structure",
+        "Chart Patterns",
+        "ICT + Liquidity",
+        "Multi-Timeframe",
+    ])
 
     with tab_candle:
         patterns = detect_candlestick_patterns(chart_df)
@@ -2888,6 +3486,282 @@ border-left:3px solid {color};border-radius:5px;padding:8px 12px;margin-bottom:5
             st.dataframe(df_table, use_container_width=True)
             st.caption("+ = profitable | - = losing | Values = Expected value per rupee risked")
 
+
+
+    # ── TAB: Market Structure (BOS + CHOCH + EQH/EQL) ────────
+    with tab_struct:
+        st.markdown("#### Market Structure — BOS, CHOCH, EQH/EQL")
+        sc1, sc2 = st.columns(2)
+
+        with sc1:
+            st.markdown("**Break of Structure (BOS) + Change of Character (CHOCH)**")
+            try:
+                bos_data = detect_bos_choch(chart_df)
+                trend_c = "#00b880" if bos_data.get("trend")=="Uptrend" else ("#e74c3c" if bos_data.get("trend")=="Downtrend" else "#f39c12")
+                st.markdown(f"""<div style='background:#161b22;border:2px solid {trend_c};border-radius:10px;padding:12px;margin-bottom:10px;'>
+<div style='font-size:16px;font-weight:700;color:{trend_c};'>{bos_data.get("trend","Unknown")}</div>
+<div style='font-size:11px;color:#888;margin-top:4px;'>
+Last Swing High: Rs.{bos_data.get("last_sh","—")} | Last Swing Low: Rs.{bos_data.get("last_sl","—")}
+</div></div>""", unsafe_allow_html=True)
+
+                if bos_data.get("bos"):
+                    b=bos_data["bos"]
+                    st.markdown(f"""<div style='background:{b["color"]}22;border-left:4px solid {b["color"]};border-radius:6px;padding:10px;margin-bottom:6px;'>
+<b style='color:{b["color"]};font-size:14px;'>BOS — {b["direction"]}</b><br>
+<span style='color:#aaa;font-size:12px;'>{b["desc"]}</span>
+</div>""", unsafe_allow_html=True)
+
+                if bos_data.get("choch"):
+                    c=bos_data["choch"]
+                    st.markdown(f"""<div style='background:{c["color"]}22;border-left:4px solid {c["color"]};border-radius:6px;padding:10px;'>
+<b style='color:{c["color"]};font-size:14px;'>CHOCH — {c["direction"]}</b><br>
+<span style='color:#aaa;font-size:12px;'>{c["desc"]}</span>
+</div>""", unsafe_allow_html=True)
+
+                if not bos_data.get("bos") and not bos_data.get("choch"):
+                    st.info("No BOS/CHOCH signal — market in range")
+            except Exception as _e:
+                st.caption(f"BOS/CHOCH: {str(_e)[:60]}")
+
+        with sc2:
+            st.markdown("**Equal Highs (EQH) / Equal Lows (EQL) — Liquidity Pools**")
+            try:
+                eq = detect_equal_levels(chart_df)
+                if eq.get("eqh"):
+                    for level in eq["eqh"]:
+                        is_near = eq.get("near_eqh") and abs(level-price)<atr_now*2
+                        c2="#e74c3c"; bg2="#2d0a0a" if is_near else "#161b22"
+                        st.markdown(f"""<div style='background:{bg2};border-left:3px solid {c2};border-radius:5px;padding:6px 10px;margin-bottom:4px;font-size:12px;'>
+<b style='color:{c2};'>EQH (Sell-side Liquidity)</b> Rs.{level:,.2f}
+{"  PRICE NEAR — Sweep possible!" if is_near else ""}
+</div>""", unsafe_allow_html=True)
+                if eq.get("eql"):
+                    for level in eq["eql"]:
+                        is_near = eq.get("near_eql") and abs(level-price)<atr_now*2
+                        c3="#00b880"; bg3="#0d2818" if is_near else "#161b22"
+                        st.markdown(f"""<div style='background:{bg3};border-left:3px solid {c3};border-radius:5px;padding:6px 10px;margin-bottom:4px;font-size:12px;'>
+<b style='color:{c3};'>EQL (Buy-side Liquidity)</b> Rs.{level:,.2f}
+{"  PRICE NEAR — Sweep possible!" if is_near else ""}
+</div>""", unsafe_allow_html=True)
+                if not eq.get("eqh") and not eq.get("eql"):
+                    st.info("No equal highs/lows detected")
+            except Exception as _e2:
+                st.caption(f"EQH/EQL: {str(_e2)[:50]}")
+
+            st.markdown("**Fibonacci Levels**")
+            try:
+                fib = get_fibonacci_levels(chart_df)
+                in_gz = fib.get("in_golden_zone",False)
+                gz_c = "#ffd700" if in_gz else "#888"
+                st.markdown(f"""<div style='background:{"#1a1a00" if in_gz else "#161b22"};border:1px solid {gz_c};border-radius:8px;padding:10px;'>
+<div style='font-size:12px;font-weight:600;color:{gz_c};'>
+{"IN Golden Zone (61.8%–38.2%) — Best entry zone!" if in_gz else "Golden Zone: Rs." + str(fib.get("golden_bot","—")) + " — Rs." + str(fib.get("golden_top","—"))}</div>
+</div>""", unsafe_allow_html=True)
+                for lvl, val in list(fib.get("levels",{}).items())[:7]:
+                    d2 = val-price; is_n = abs(d2)/price<0.008
+                    c4 = "#ffd700" if "Golden" in lvl else ("#00b880" if is_n and d2<0 else ("#e74c3c" if is_n and d2>0 else "#888"))
+                    st.markdown(f"""<div style='display:flex;justify-content:space-between;background:#161b22;border-radius:4px;padding:4px 8px;margin-bottom:2px;font-size:11px;border-left:2px solid {c4};'>
+<span style='color:{c4};'>{lvl}</span><span style='color:#ccc;'>Rs.{val:,.2f}</span>
+<span style='color:{c4};'>{"← NEAR" if is_n else ""}</span></div>""", unsafe_allow_html=True)
+            except Exception as _e3:
+                st.caption(f"Fibonacci: {str(_e3)[:50]}")
+
+    # ── TAB: Fibonacci + Trendline ────────────────────────────
+    with tab_pat:
+        st.markdown("#### Chart Patterns (Auto-Detected)")
+        try:
+            cp = detect_chart_patterns(chart_df)
+            if cp:
+                for p in cp:
+                    pc4="#00b880" if p["type"]=="bullish" else ("#e74c3c" if p["type"]=="bearish" else "#f39c12")
+                    pb4="#0d2818" if p["type"]=="bullish" else ("#2d0a0a" if p["type"]=="bearish" else "#1a1500")
+                    tgt_line = f"<div style='font-size:11px;color:{pc4};margin-top:5px;'>Target: Rs.{p['target']:,.2f}</div>" if p.get("target") else ""
+                    st.markdown(f"""<div style='background:{pb4};border:2px solid {pc4};border-radius:12px;padding:14px;margin-bottom:10px;'>
+<div style='display:flex;justify-content:space-between;align-items:center;'>
+  <div>
+    <div style='font-size:16px;font-weight:700;color:{pc4};'>{p["pattern"]}</div>
+    <div style='font-size:12px;color:#888;margin-top:3px;'>{p["desc"]}</div>
+    {tgt_line}
+  </div>
+  <div style='text-align:right;'>
+    <div style='font-size:14px;font-weight:600;color:{pc4};'>{p["signal"]}</div>
+    <div style='font-size:11px;color:#888;'>{"★"*p["strength"]} {p["strength"]}/5</div>
+  </div>
+</div></div>""", unsafe_allow_html=True)
+            else:
+                st.info("No chart patterns in current data. Try 1mo/Swing mode.")
+
+            st.markdown("**Trendlines**")
+            try:
+                tl = detect_trendlines(chart_df)
+                sig_c5 = "#00b880" if "BUY" in tl.get("signal","") else ("#e74c3c" if "SELL" in tl.get("signal","") else "#f39c12")
+                st.markdown(f"""<div style='background:#161b22;border:2px solid {sig_c5};border-radius:8px;padding:10px;margin-bottom:8px;'>
+<div style='font-size:13px;font-weight:600;color:{sig_c5};'>{tl.get("signal","—")}</div></div>""", unsafe_allow_html=True)
+                r5=tl.get("resistance"); s5=tl.get("support")
+                if r5: st.markdown(f"""<div style='background:#2d0a0a;border-left:3px solid #e74c3c;border-radius:5px;padding:8px;margin-bottom:5px;font-size:12px;'>
+<b style='color:#e74c3c;'>Resistance TL</b> Rs.{r5["price"]:,.2f} | {r5["direction"]} | Touches:{r5["touches"]}{"  BROKEN!" if r5["broken"] else ""}</div>""", unsafe_allow_html=True)
+                if s5: st.markdown(f"""<div style='background:#0d2818;border-left:3px solid #00b880;border-radius:5px;padding:8px;font-size:12px;'>
+<b style='color:#00b880;'>Support TL</b> Rs.{s5["price"]:,.2f} | {s5["direction"]} | Touches:{s5["touches"]}{"  BROKEN!" if s5["broken"] else ""}</div>""", unsafe_allow_html=True)
+            except Exception as _tl:
+                st.caption(f"Trendline: {str(_tl)[:50]}")
+        except Exception as _cp2:
+            st.warning(f"Chart patterns: {str(_cp2)[:60]}")
+
+    # ── TAB: ICT + Liquidity ──────────────────────────────────
+    with tab_ict2:
+        st.markdown("#### ICT Concepts + Liquidity Sweep")
+        ic1, ic2 = st.columns(2)
+
+        with ic1:
+            # Liquidity Sweep
+            st.markdown("**Liquidity Sweep (Stop Hunt)**")
+            try:
+                lq = detect_liquidity_sweep(chart_df)
+                if lq:
+                    for sw in lq:
+                        sc6=sw["color"]
+                        st.markdown(f"""<div style='background:{"#0d2818" if sc6=="#00b880" else "#2d0a0a"};border:1px solid {sc6};border-radius:8px;padding:10px;margin-bottom:6px;'>
+<div style='font-size:13px;font-weight:700;color:{sc6};'>{sw["type"]}</div>
+<div style='font-size:11px;color:#aaa;margin:4px 0;'>{sw["desc"]}</div>
+<div style='font-size:12px;color:{sc6};font-weight:600;'>Signal: {sw["signal"]} | Swept: Rs.{sw["swept"]} | {sw["date"]}</div>
+</div>""", unsafe_allow_html=True)
+                else:
+                    st.success("No liquidity sweeps — market moving cleanly")
+            except Exception as _lq2: st.caption(f"Sweep: {str(_lq2)[:50]}")
+
+            # Premium/Discount
+            st.markdown("**Premium / Discount Zones**")
+            try:
+                pd6 = get_premium_discount(chart_df)
+                zc6=pd6["color"]
+                st.markdown(f"""<div style='background:{zc6}22;border:2px solid {zc6};border-radius:10px;padding:14px;'>
+<div style='font-size:18px;font-weight:700;color:{zc6};'>{pd6["zone"]}</div>
+<div style='font-size:13px;color:#aaa;margin:6px 0;'>{pd6["recommendation"]}</div>
+<div style='background:rgba(255,255,255,0.08);border-radius:99px;height:10px;margin-bottom:8px;position:relative;'>
+  <div style='width:{pd6["pct"]}%;background:{zc6};border-radius:99px;height:10px;'></div>
+  <div style='position:absolute;left:50%;top:0;width:2px;height:10px;background:#fff;opacity:0.3;'></div>
+</div>
+<div style='display:flex;justify-content:space-between;font-size:10px;color:#888;'>
+  <span>Discount (Buy)</span><span style='color:#f39c12;'>Eq</span><span>Premium (Sell)</span>
+</div>
+<div style='margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;text-align:center;font-size:11px;'>
+  <div><div style='color:#888;'>Range H</div><div style='color:#e74c3c;'>Rs.{pd6["high"]}</div></div>
+  <div><div style='color:#888;'>Mid</div><div style='color:#f39c12;'>Rs.{pd6["mid"]}</div></div>
+  <div><div style='color:#888;'>Range L</div><div style='color:#00b880;'>Rs.{pd6["low"]}</div></div>
+</div></div>""", unsafe_allow_html=True)
+            except Exception as _pd: st.caption(f"P/D: {str(_pd)[:50]}")
+
+        with ic2:
+            # Kill Zones
+            st.markdown("**ICT Kill Zones (Live)**")
+            try:
+                kz = get_kill_zones()
+                if kz.get("active"):
+                    az=kz["active"]
+                    st.markdown(f"""<div style='background:{az["color"]}22;border:2px solid {az["color"]};border-radius:8px;padding:10px;margin-bottom:8px;'>
+<div style='font-size:14px;font-weight:700;color:{az["color"]};'>ACTIVE: {az["name"]}</div>
+<div style='font-size:12px;color:#aaa;'>{az["desc"]}</div>
+</div>""", unsafe_allow_html=True)
+                for start,end,name,color,desc in kz["zones"]:
+                    active_z = kz.get("active") and kz["active"]["name"]==name
+                    bg7="#161b22" if not active_z else f"{color}11"
+                    bd7=f"1px solid {color}" if active_z else "1px solid #21262d"
+                    st.markdown(f"""<div style='background:{bg7};border:{bd7};border-radius:6px;padding:6px 10px;margin-bottom:4px;font-size:11px;'>
+<b style='color:{color};'>{"LIVE — " if active_z else ""}{name}</b> ({start}–{end})<br>
+<span style='color:#888;'>{desc}</span></div>""", unsafe_allow_html=True)
+            except Exception as _kz: st.caption(f"Kill Zones: {str(_kz)[:50]}")
+
+            # Institutional Score
+            st.markdown("**Institutional Score**")
+            try:
+                inst = get_institutional_score(chart_df, stock)
+                isc=inst["color"]; isc2=inst["score"]
+                st.markdown(f"""<div style='background:{isc}22;border:2px solid {isc};border-radius:10px;padding:14px;text-align:center;'>
+<div style='font-size:11px;color:#888;text-transform:uppercase;'>Institutional Grade</div>
+<div style='font-size:36px;font-weight:800;color:{isc};'>{isc2}/100</div>
+<div style='font-size:14px;color:{isc};font-weight:600;'>{inst["grade"]} — {inst["label"]}</div>
+<div style='background:rgba(255,255,255,0.1);border-radius:99px;height:8px;margin:10px 0;'>
+<div style='width:{isc2}%;background:{isc};border-radius:99px;height:8px;'></div></div>
+<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;font-size:10px;'>
+{"".join([f"<div><div style='color:#888;'>{k.title()}</div><div style='color:{isc};font-weight:600;'>{v}</div></div>" for k,v in inst["breakdown"].items()])}
+</div></div>""", unsafe_allow_html=True)
+            except Exception as _is: st.caption(f"Inst Score: {str(_is)[:50]}")
+
+    # ── TAB: Multi-Timeframe ──────────────────────────────────
+    with tab_mtf:
+        st.markdown("#### Multi-Timeframe Confluence (5m + 15m + 1H + 4H)")
+        st.caption("Comparing all timeframes — requires internet connection")
+
+        if st.button("Load MTF Analysis", type="primary", key="mtf_load"):
+            with st.spinner("Loading 4 timeframes..."):
+                mtf = get_mtf_confluence(stock)
+            st.session_state["mtf_cache"] = mtf
+
+        mtf = st.session_state.get("mtf_cache")
+        if mtf:
+            conf = mtf["confluence"]
+            sig7 = mtf["signal"]
+            cc7  = "#00b880" if "BUY" in sig7 else ("#e74c3c" if "SELL" in sig7 else "#f39c12")
+
+            st.markdown(f"""<div style='background:{cc7}22;border:2px solid {cc7};border-radius:12px;padding:16px;margin-bottom:14px;text-align:center;'>
+<div style='font-size:11px;color:#888;text-transform:uppercase;'>MTF Confluence</div>
+<div style='font-size:36px;font-weight:800;color:{cc7};'>{conf}%</div>
+<div style='font-size:14px;color:{cc7};font-weight:600;'>{sig7}</div>
+<div style='background:rgba(255,255,255,0.1);border-radius:99px;height:10px;margin:10px auto;max-width:250px;'>
+<div style='width:{conf}%;background:{cc7};border-radius:99px;height:10px;'></div></div>
+<div style='font-size:12px;color:#888;'>
+Bull TFs: {mtf.get("bull_count",0)} | Bear TFs: {mtf.get("bear_count",0)} | Total: {len(mtf.get("breakdown",{}))}
+</div></div>""", unsafe_allow_html=True)
+
+            tf_cols = st.columns(len(mtf.get("breakdown",{})) or 4)
+            for i,(tf,data) in enumerate(mtf.get("breakdown",{}).items()):
+                tc8="#00b880" if data["direction"]=="BULLISH" else ("#e74c3c" if data["direction"]=="BEARISH" else "#f39c12")
+                if i < len(tf_cols):
+                    tf_cols[i].markdown(f"""<div style='background:{tc8}22;border:1px solid {tc8};border-radius:8px;padding:10px;text-align:center;'>
+<div style='font-size:12px;color:#888;'>{tf}</div>
+<div style='font-size:20px;font-weight:700;color:{tc8};'>{data["pct"]}%</div>
+<div style='font-size:11px;color:{tc8};'>{data["direction"]}</div>
+<div style='font-size:10px;color:#888;'>RSI {data["rsi"]}</div>
+<div style='font-size:10px;color:#888;'>{data["score"]}/6</div>
+</div>""", unsafe_allow_html=True)
+
+            with st.expander("How to use MTF Confluence"):
+                st.markdown("""
+**Multi-Timeframe Rules:**
+- **All 4 TFs bullish** → Strongest BUY signal, high confidence
+- **3/4 TFs bullish** → BUY — good confluence
+- **2/4 TFs aligned** → WAIT — mixed signals
+- **3-4 TFs bearish** → SELL signal
+
+**Entry Rule:**
+1. Check 4H/1H for trend direction
+2. Wait for 15m to confirm direction
+3. Enter on 5m when it aligns
+4. SL below 5m swing low
+
+**Best setups:** When 1H + 4H agree → enter on 5m/15m pullback
+""")
+        else:
+            st.info("Click 'Load MTF Analysis' to compare all timeframes")
+
+        # Portfolio Risk Check
+        st.markdown("---")
+        st.markdown("#### Portfolio Risk Control")
+        try:
+            pr = portfolio_risk_check(
+                st.session_state.paper_balance,
+                st.session_state.get("paper_positions", {}),
+                float(last.get("ATR", price*0.01)) * 1.5 * max(1, int((capital*(risk/100))/max(float(last.get("ATR",price*0.01))*1.5,0.01)))
+            )
+            prc=pr["color"]
+            st.markdown(f"""<div style='background:{prc}22;border:2px solid {prc};border-radius:10px;padding:12px;'>
+<div style='font-size:16px;font-weight:700;color:{prc};'>{pr["status"]} — Portfolio Risk: {pr["exposure_pct"]}%</div>
+<div style='background:rgba(255,255,255,0.1);border-radius:99px;height:8px;margin:8px 0;'>
+<div style='width:{min(pr["exposure_pct"],100)}%;background:{prc};border-radius:99px;height:8px;'></div></div>
+<div style='font-size:12px;color:#888;'>Open Positions: {pr["positions"]} | Max allowed: 5 | Exposure: {pr["exposure_pct"]}%</div>
+{"".join([f"<div style='margin-top:4px;font-size:12px;color:#e74c3c;'>⚠ {w}</div>" for w in pr["warnings"]])}
+</div>""", unsafe_allow_html=True)
+        except Exception as _pr: st.caption(f"Portfolio Risk: {str(_pr)[:50]}")
 
 # =============================================================
 # TRADE LOGS
