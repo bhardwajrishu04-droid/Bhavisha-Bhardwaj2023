@@ -1383,7 +1383,6 @@ def kelly_sizing(win_rate, rr_ratio, capital, max_risk_pct=0.20):
     }
 
 
-
 # =============================================================
 # PROFESSIONAL TRADING ENGINE v3.0
 # ICT + Market Structure + Chart Patterns + Institutional Logic
