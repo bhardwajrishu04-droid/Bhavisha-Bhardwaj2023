@@ -2452,6 +2452,13 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         penalty_pts+=8; penalties.append(("Downtrend Structure",-8,"#e74c3c"))
     total_score=max(0,raw_score-penalty_pts)
 
+    # ── DERIVED DISPLAY VARS ─────────────────────────────────
+    c_ai       = ai_prob > 0.55
+    struct_pct = min(100, round(struct_layer_score / 15 * 100))
+    candle_pct = min(100, round(candle_layer_score / 2  * 100))
+    vol_pct    = min(100, round(vol_layer_score    / 5  * 100))
+    smc_pct    = min(100, round(smc_layer_score    / 10 * 100))
+
     # ── FINAL VERDICT ────────────────────────────────────────
     if force_trade:        verdict="TRADE NOW";    v_color="#00b880"; v_bg="#002d1e"; v_emoji="🚀"
     elif total_score>=82:  verdict="STRONG BUY";   v_color="#00b880"; v_bg="#002d1e"; v_emoji="🔥"
@@ -2631,7 +2638,6 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 <div style='background:{go_bg};border:3px solid {go_color};border-radius:20px;
 padding:0;margin:12px 0;overflow:hidden;'>
 
-  <!-- TOP VERDICT BAR -->
   <div style='background:{go_color}22;padding:20px 24px;border-bottom:1px solid {go_color}44;'>
     <div style='display:flex;justify-content:space-between;align-items:center;'>
       <div>
@@ -2652,7 +2658,6 @@ padding:0;margin:12px 0;overflow:hidden;'>
       </div>
     </div>
 
-    <!-- SCORE BAR -->
     <div style='background:rgba(255,255,255,0.08);border-radius:99px;height:16px;
     margin:16px 0 6px;position:relative;overflow:hidden;'>
       <div style='width:{total_score}%;background:linear-gradient(90deg,{go_color}77,{go_color});
@@ -2671,10 +2676,8 @@ padding:0;margin:12px 0;overflow:hidden;'>
     </div>
   </div>
 
-  <!-- MAIN CONTENT GRID -->
   <div style='padding:18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:18px;'>
 
-    <!-- LEFT: CHECKLIST -->
     <div>
       <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;'>
         Must-Have Conditions ({must_pass}/{must_total})
@@ -2686,18 +2689,15 @@ padding:0;margin:12px 0;overflow:hidden;'>
       {next_html}
     </div>
 
-    <!-- RIGHT: SCORES + PLAN -->
     <div>
-      <!-- Layer scores -->
-      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>
+        <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>
         Score Breakdown (10 Layers)
       </div>
       <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:14px;'>
         {layer_rows}
       </div>
 
-      <!-- Trade Plan -->
-      <div style='background:rgba(0,0,0,0.4);border-radius:10px;padding:12px;margin-bottom:10px;'>
+        <div style='background:rgba(0,0,0,0.4);border-radius:10px;padding:12px;margin-bottom:10px;'>
         <div style='font-size:10px;color:#888;text-transform:uppercase;margin-bottom:8px;'>Trade Plan</div>
         <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center;'>
           <div><div style='font-size:9px;color:#888;'>Entry</div>
@@ -2713,8 +2713,7 @@ padding:0;margin:12px 0;overflow:hidden;'>
         </div>
       </div>
 
-      <!-- Win/Loss stats -->
-      <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;'>
+        <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;'>
         <div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);
         border-radius:8px;padding:8px;text-align:center;'>
           <div style='font-size:9px;color:#888;'>Win Prob</div>
@@ -2734,7 +2733,6 @@ padding:0;margin:12px 0;overflow:hidden;'>
     </div>
   </div>
 
-  <!-- PENALTIES / RISK WARNINGS -->
   <div style='padding:0 24px 18px;'>
     {penalty_rows}
     <div style='margin-top:8px;font-size:10px;color:#444;text-align:center;'>
@@ -2765,16 +2763,22 @@ padding:0;margin:12px 0;overflow:hidden;'>
                     st.markdown(f"`{fn}` {fi:.3f}")
 
 
+        # ── Variables needed for detail section ─────────────────
+        c_ai       = ai_prob > 0.55
+        struct_pct = min(100, round(struct_layer_score/15*100))
+        candle_pct = min(100, round(candle_layer_score/2*100))
+        vol_pct    = min(100, round(vol_layer_score/5*100))
+        smc_pct    = min(100, round(smc_layer_score/10*100))
         col_sig, col_pos = st.columns(2)
     with col_sig:
         st.markdown("#### Detailed Layer Checks")
         all_checks_display = {
             **tech_checks,
-            f"AI Model ({ai_pct}%)": c_ai,
-            "Market Structure Bullish": struct_pct >= 65,
-            "Candle Pattern Bullish":   candle_pct >= 65,
-            "Volume Confirmation":      vol_pct >= 55,
-            "SMC / OB Zone":            smc_pct >= 65,
+            f"AI Model ({ai_pct}%)": ai_prob > 0.55,
+            "Market Structure Bullish": struct_layer_score >= 10,
+            "Candle Pattern Bullish":   candle_layer_score >= 1,
+            "Volume Confirmation":      vol_layer_score >= 3,
+            "SMC / OB Zone":            smc_layer_score >= 6,
         }
         chk_df = pd.DataFrame([
             {"Check": k, "Pass": "✅" if v else "❌"}
