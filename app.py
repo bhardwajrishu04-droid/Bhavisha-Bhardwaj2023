@@ -2325,6 +2325,8 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     c_supertr= float(last.get("ST_Dir",0)) > 0
     rsi_ob   = float(last.get("RSI",50)) > 75
     rsi_os   = float(last.get("RSI",50)) < 30
+    combined = total_score
+    rsi_os   = float(last.get("RSI",50)) < 30
     tech_checks = {
         "Trend EMA20>EMA50": c_trend, "Price > EMA9": c_ema9,
         "RSI 45-68":         c_rsi,   "MACD > Signal": c_macd,
@@ -2895,73 +2897,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             else:
                 st.caption("Install tensorflow for LSTM: pip install tensorflow")
 
-    st.markdown(f"""
-<div style="background:{meter_bg};border:2px solid {meter_color};border-radius:12px;padding:16px 20px;margin-bottom:14px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-    <div style="font-size:13px;font-weight:600;color:#ccc;">🧠 Combined AI + Technical Score</div>
-    <div style="font-size:22px;font-weight:800;color:{meter_color};">{combined}%
-      <span style="font-size:13px;font-weight:500;margin-left:6px;">{meter_label}</span>
-    </div>
-  </div>
-  <div style="background:rgba(255,255,255,0.1);border-radius:99px;height:14px;margin-bottom:12px;position:relative;">
-    <div style="width:{combined}%;background:{meter_color};border-radius:99px;height:14px;box-shadow:0 0 8px {meter_color}66;"></div>
-    <div style="position:absolute;left:80%;top:-4px;width:2px;height:22px;background:#fff;opacity:0.4;"></div>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;">
-    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
-      <div style="font-size:11px;color:#999;margin-bottom:3px;">🤖 AI Score</div>
-      <div style="font-size:22px;font-weight:700;color:{'#27ae60' if ai_pct>=60 else ('#f39c12' if ai_pct>=40 else '#e74c3c')};">{ai_pct}%</div>
-      <div style="font-size:10px;color:#888;">{'Bullish' if ai_pct>=60 else ('Neutral' if ai_pct>=40 else 'Bearish')}</div>
-    </div>
-    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
-      <div style="font-size:11px;color:#999;margin-bottom:3px;">📊 Technical</div>
-      <div style="font-size:22px;font-weight:700;color:{'#27ae60' if tech_pct>=75 else ('#f39c12' if tech_pct>=50 else '#e74c3c')};">{tech_pct}%</div>
-      <div style="font-size:10px;color:#888;">{tech_score}/4 checks</div>
-    </div>
-    <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:8px;">
-      <div style="font-size:11px;color:#999;margin-bottom:3px;">🎯 RSI</div>
-      <div style="font-size:22px;font-weight:700;color:{'#e74c3c' if rsi_ob else ('#4e8fff' if rsi_os else '#27ae60')};">{last['RSI']:.0f}</div>
-      <div style="font-size:10px;color:#888;">{'Overbought' if rsi_ob else ('Oversold' if rsi_os else 'Normal')}</div>
-    </div>
-  </div>
-  <div style="margin-top:8px;font-size:11px;color:#888;text-align:center;">80%+ = STRONG BUY · Combined = AI×50% + Technical×50%</div>
-</div>""", unsafe_allow_html=True)
 
-    col_sig, col_pos = st.columns(2)
-    with col_sig:
-        st.markdown(f"#### 🎯 {selected_mode} Signal")
-        checks = {
-            "Trend (Price > EMA20 > EMA50)":   c_trend,
-            "RSI Bullish (45–68)":              c_rsi,
-            "MACD > Signal Line":               c_macd,
-            "Volume Surge (> 1.1x)":            c_vol,
-            f"AI Bullish ({ai_pct}% > 55%)":   c_ai,
-        }
-        atr_now = float(last["ATR"])
-        if direction == "STRONG BUY":
-            st.success(f"🚀 STRONG BUY | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
-            if ALERT_ON_SIGNAL:
-                fire_alert(f"STRONG BUY [{selected_mode}]", stock, price,
-                           max(1,int((capital*risk/100)/max(atr_now*1.5,0.01))),
-                           round(price-atr_now*1.5,2), round(price+atr_now*3,2), score, mode)
-        elif direction == "BUY":
-            st.success(f"🟢 BUY SIGNAL | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
-            if ALERT_ON_SIGNAL:
-                fire_alert(f"BUY SIGNAL [{selected_mode}]", stock, price,
-                           max(1,int((capital*risk/100)/max(atr_now*1.5,0.01))),
-                           round(price-atr_now*1.5,2), round(price+atr_now*3,2), score, mode)
-        elif direction == "SELL":
-            st.error(f"🔴 SELL / AVOID | Combined {combined}% | AI {ai_pct}% | Tech {tech_pct}%")
-        else:
-            if rsi_ob:
-                st.warning(f"🟡 WAIT — RSI Overbought ({last['RSI']:.0f}) | Pull back expected")
-            elif combined < 62:
-                st.warning(f"🟡 WAIT — Combined {combined}% (need 62%+ for BUY)")
-            else:
-                st.warning(f"🟡 WAIT | Combined {combined}% | Need stronger confirmation")
-
-        chk_df = pd.DataFrame([{"Check":k,"Pass":"✅" if v else "❌"} for k,v in checks.items()])
-        st.dataframe(chk_df, hide_index=True, height=205)
 
     with col_pos:
         st.markdown(f"#### ⚖️ Position Sizing — {selected_mode}")
