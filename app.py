@@ -2131,6 +2131,31 @@ def build_trading_advisor(user_name, stock_name, expl, total_score,
     return "\n".join(out)
 
 
+
+
+# =============================================================
+# MULTI-BROKER API SUPPORT (Startup Scale)
+# =============================================================
+BROKER_APIS = {
+    "Zerodha Kite":  {"lib": "kiteconnect",   "status": "Active",    "color": "#00b880"},
+    "Dhan HQ":       {"lib": "dhanhq",         "status": "Ready",     "color": "#4e8fff"},
+    "Angel One":     {"lib": "smartapi-python","status": "Ready",     "color": "#a78bfa"},
+    "Upstox":        {"lib": "upstox-python",  "status": "Ready",     "color": "#f39c12"},
+    "Fyers":         {"lib": "fyers-apiv3",    "status": "Ready",     "color": "#00e5a0"},
+}
+
+def show_broker_status():
+    """Show connected broker status."""
+    results = {}
+    for broker, info in BROKER_APIS.items():
+        try:
+            __import__(info["lib"].split("-")[0].replace("-","_"))
+            results[broker] = {"installed": True, **info}
+        except ImportError:
+            results[broker] = {"installed": False, **info}
+    return results
+
+
 # =============================================================
 # MAIN DASHBOARD
 # =============================================================
@@ -2838,7 +2863,107 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     _eh+=f"<div style='background:rgba(255,255,255,0.06);border-radius:99px;height:6px;margin-top:6px;'><div style='width:{_conf}%;background:{_ec};border-radius:99px;height:6px;'></div></div></div>"
     st.markdown(_eh, unsafe_allow_html=True)
 
-    with st.expander("AI Trading Advisor — Personal Advice"):
+    # ── PORTFOLIO HEATMAP + SECTOR EXPOSURE ─────────────────
+    with st.expander("📊 Portfolio Dashboard — Heat Map & Sector Exposure"):
+        if st.session_state.get("paper_positions"):
+            positions = st.session_state.paper_positions
+            total_cap = st.session_state.paper_balance
+
+            # Position sizing table
+            st.markdown("**Open Positions:**")
+            pos_data = []
+            total_exposed = 0
+            sector_exp = {}
+
+            for sym, pos in positions.items():
+                try:
+                    import yfinance as _yf3
+                    cur_px = float(_yf3.Ticker(pos["stock"]).history(period="1d",interval="1m")["Close"].iloc[-1])
+                except Exception:
+                    cur_px = pos["price"]
+
+                pnl    = (cur_px - pos["price"]) * pos["qty"]
+                value  = cur_px * pos["qty"]
+                pnl_pct= (cur_px - pos["price"]) / pos["price"] * 100
+                total_exposed += value
+
+                # Find sector
+                sector = "Other"
+                for sec_name, sec_stocks in STOCKS.items():
+                    if pos["stock"] in sec_stocks:
+                        sector = sec_name.split(" ")[-1]
+                        break
+                sector_exp[sector] = sector_exp.get(sector, 0) + value
+
+                pos_data.append({
+                    "Stock": sym, "Entry": f"Rs.{pos['price']:.2f}",
+                    "Current": f"Rs.{cur_px:.2f}", "Qty": pos["qty"],
+                    "Value": f"Rs.{value:,.0f}", "P&L": f"Rs.{pnl:+.0f}",
+                    "P&L%": f"{pnl_pct:+.1f}%", "Sector": sector
+                })
+
+            if pos_data:
+                st.dataframe(pos_data, hide_index=True, use_container_width=True)
+
+            # Heatmap
+            st.markdown("**Portfolio Heat Map:**")
+            hm_cols = st.columns(min(5, len(pos_data)))
+            for i, p in enumerate(pos_data):
+                if i < len(hm_cols):
+                    pct = float(p["P&L%"].replace("%","").replace("+",""))
+                    hc = "#00b880" if pct>1 else ("#27ae60" if pct>0 else ("#e74c3c" if pct<-1 else "#f39c12"))
+                    hm_cols[i].markdown(f"<div style='background:{hc}33;border:2px solid {hc};border-radius:10px;padding:12px;text-align:center;'><div style='font-size:14px;font-weight:700;color:{hc};'>{p['Stock']}</div><div style='font-size:20px;font-weight:800;color:{hc};'>{p['P&L%']}</div><div style='font-size:11px;color:#888;'>{p['Value']}</div></div>", unsafe_allow_html=True)
+
+            # Sector Exposure
+            st.markdown("**Sector Exposure:**")
+            total_v = sum(sector_exp.values()) + 0.01
+            se_cols = st.columns(len(sector_exp)) if sector_exp else st.columns(1)
+            for i, (sec, val) in enumerate(sector_exp.items()):
+                if i < len(se_cols):
+                    pct2 = val/total_v*100
+                    se_cols[i].markdown(f"<div style='background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px;text-align:center;'><div style='font-size:11px;color:#888;'>{sec}</div><div style='font-size:20px;font-weight:700;color:#4e8fff;'>{pct2:.0f}%</div><div style='font-size:10px;color:#555;'>Rs.{val:,.0f}</div></div>", unsafe_allow_html=True)
+
+            # Risk metrics
+            exposure_pct = total_exposed/(total_cap+total_exposed+0.01)*100
+            st.markdown(f"**Portfolio Risk:** Exposure {exposure_pct:.1f}% | Positions: {len(positions)}/5 max")
+            st.progress(min(exposure_pct/100, 1.0))
+            if exposure_pct > 80:
+                st.error("Portfolio >80% exposed — HIGH RISK!")
+            elif exposure_pct > 60:
+                st.warning("Portfolio >60% exposed — Consider reducing")
+        else:
+            st.info("No open positions. Buy some stocks first.")
+
+    with st.expander("🎓 Hindi AI Coach — Trading Seekho"):
+        st.markdown("**AI Coach — Hindi mein trading samjhega!**")
+        topics = {
+            "SMC kya hota hai?":         "Explain Smart Money Concepts in simple Hindi for beginners. Cover Order Blocks, FVG, Liquidity. Short, practical.",
+            "BOS aur CHOCH samjhao":     "Explain Break of Structure (BOS) and Change of Character (CHOCH) in Hindi with NSE examples.",
+            "ICT Kill Zones":            "Explain ICT Kill Zones in Hindi for Indian NSE market timing.",
+            "Risk management":           "Explain position sizing and risk management in Hindi for Indian retail traders.",
+            "RSI kaise use kare?":       "Explain RSI usage in Hindi for Indian stock traders with buy/sell rules.",
+            "Fibonacci kya hai?":        "Explain Fibonacci retracement in Hindi for stock traders. Where to buy on dips?",
+        }
+        t_choice = st.selectbox("Topic:", list(topics.keys()), key="coach_topic")
+        custom_q = st.text_input("Ya apna sawaal:", placeholder="Support aur Resistance kya hai?", key="coach_q")
+        if st.button("Coach se Seekho", type="primary", key="coach_ask"):
+            prompt = custom_q.strip() if custom_q.strip() else topics[t_choice]
+            with st.spinner("Coach soch raha hai..."):
+                try:
+                    import anthropic as _ant
+                    _c = _ant.Anthropic()
+                    _r = _c.messages.create(
+                        model="claude-opus-4-5", max_tokens=500,
+                        system="Tu experienced Indian stock trader aur teacher hai. Hindi mein samjha. Simple language, real NSE examples, bullet points use kar.",
+                        messages=[{"role":"user","content":prompt}])
+                    st.markdown(_r.content[0].text)
+                except Exception:
+                    built = {
+                        "SMC kya hota hai?":"**SMC (Smart Money Concepts):**\n\n- **Order Block** = Woh candle jahan se bada move hua\n- **FVG** = Gap jahan trading nahi hua — price wapas aata hai fill karne\n- **Liquidity** = Stop losses ka cluster — price pehle wahan jaata hai\n\n*Rule: Jab retail SELL kare — Smart Money BUY karta hai!*",
+                    }
+                    st.markdown(built.get(t_choice, f"**{t_choice}**\n\nANTHROPIC_API_KEY Streamlit Secrets mein add karo coach ke liye."))
+
+    with st.expander("🤖 AI Trading Advisor — Personal Advice"):
         try:
             _mtf_adv = st.session_state.get("mtf_cache")
             _advice  = build_trading_advisor(
