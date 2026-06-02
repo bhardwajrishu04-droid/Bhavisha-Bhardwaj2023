@@ -1406,10 +1406,14 @@ def detect_equal_levels(df, tolerance=0.002):
     return {
         "eqh": [round(v,2) for v in eqh],
         "eql": [round(v,2) for v in eql],
+        "BSL": [round(v,2) for v in eqh],   # Buy-Side Liquidity (above EQH)
+        "SSL": [round(v,2) for v in eql],   # Sell-Side Liquidity (below EQL)
         "nearest_eqh": round(nearest_eqh,2) if nearest_eqh else None,
         "nearest_eql": round(nearest_eql,2) if nearest_eql else None,
         "near_eqh": nearest_eqh and abs(nearest_eqh-price)/price < 0.005,
         "near_eql": nearest_eql and abs(nearest_eql-price)/price < 0.005,
+        "near_BSL": nearest_eqh and abs(nearest_eqh-price)/price < 0.008,
+        "near_SSL": nearest_eql and abs(nearest_eql-price)/price < 0.008,
     }
 
 
@@ -1890,10 +1894,14 @@ def get_institutional_score(df, stock: str) -> dict:
     elif total >= 20: grade,label = "D", "SELL/Avoid"
     else:             grade,label = "F", "Strong SELL"
 
+    # Normalize to 100
+    max_possible = 20 + 20 + 20 + 16 + 4   # volume+trend+momentum+smc+risk+options
+    normalized   = round(min(100, total/max_possible*100))
     return {
-        "score": total, "grade": grade, "label": label,
+        "score": normalized, "raw": total, "grade": grade, "label": label,
         "breakdown": scores,
-        "color": "#00b880" if total>=65 else ("#f39c12" if total>=35 else "#e74c3c"),
+        "breakdown_max": {"volume":20,"trend":20,"momentum":20,"smc":20,"risk":16,"options":4},
+        "color": "#00b880" if normalized>=65 else ("#f39c12" if normalized>=35 else "#e74c3c"),
     }
 
 
@@ -3986,29 +3994,36 @@ border-left:3px solid {color};border-radius:5px;padding:8px 12px;margin-bottom:5
             st.markdown("**Break of Structure (BOS) + Change of Character (CHOCH)**")
             try:
                 bos_data = detect_bos_choch(chart_df)
-                trend_c = "#00b880" if bos_data.get("trend")=="Uptrend" else ("#e74c3c" if bos_data.get("trend")=="Downtrend" else "#f39c12")
-                st.markdown(f"""<div style='background:#161b22;border:2px solid {trend_c};border-radius:10px;padding:12px;margin-bottom:10px;'>
-<div style='font-size:16px;font-weight:700;color:{trend_c};'>{bos_data.get("trend","Unknown")}</div>
-<div style='font-size:11px;color:#888;margin-top:4px;'>
-Last Swing High: Rs.{bos_data.get("last_sh","—")} | Last Swing Low: Rs.{bos_data.get("last_sl","—")}
-</div></div>""", unsafe_allow_html=True)
-
+                trend    = bos_data.get("trend","Unknown")
+                tc2      = "#00b880" if trend=="Uptrend" else ("#e74c3c" if trend=="Downtrend" else "#f39c12")
+                # Trend + swing levels
+                _bd  = f"<div style='background:{tc2}22;border:2px solid {tc2};border-radius:12px;padding:14px;margin-bottom:12px;'>"
+                _bd += f"<div style='font-size:20px;font-weight:800;color:{tc2};'>{trend}</div>"
+                _bd += f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;'>"
+                _bd += f"<div style='background:rgba(0,0,0,0.3);border-radius:6px;padding:8px;text-align:center;'><div style='font-size:9px;color:#888;'>Last Swing High</div><div style='font-size:14px;color:#e74c3c;font-weight:600;'>Rs.{bos_data.get('last_sh','—')}</div></div>"
+                _bd += f"<div style='background:rgba(0,0,0,0.3);border-radius:6px;padding:8px;text-align:center;'><div style='font-size:9px;color:#888;'>Last Swing Low</div><div style='font-size:14px;color:#00b880;font-weight:600;'>Rs.{bos_data.get('last_sl','—')}</div></div>"
+                _bd += "</div></div>"
+                # BOS
                 if bos_data.get("bos"):
-                    b=bos_data["bos"]
-                    st.markdown(f"""<div style='background:{b["color"]}22;border-left:4px solid {b["color"]};border-radius:6px;padding:10px;margin-bottom:6px;'>
-<b style='color:{b["color"]};font-size:14px;'>BOS — {b["direction"]}</b><br>
-<span style='color:#aaa;font-size:12px;'>{b["desc"]}</span>
-</div>""", unsafe_allow_html=True)
-
+                    b=bos_data["bos"]; bc=b["color"]
+                    _bd += f"<div style='background:{bc}22;border:2px solid {bc};border-radius:10px;padding:12px;margin-bottom:10px;'>"
+                    _bd += f"<div style='font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px;'>BOS — Break of Structure</div>"
+                    _bd += f"<div style='font-size:18px;font-weight:800;color:{bc};'>{b['direction']}</div>"
+                    _bd += f"<div style='font-size:12px;color:#aaa;margin-top:5px;'>{b['desc']}</div>"
+                    _bd += f"<div style='font-size:11px;color:{bc};margin-top:5px;'>Level: Rs.{b['level']}</div></div>"
+                else:
+                    _bd += "<div style='background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;color:#555;text-align:center;'>No BOS — Price within structure</div>"
+                # CHOCH
                 if bos_data.get("choch"):
-                    c=bos_data["choch"]
-                    st.markdown(f"""<div style='background:{c["color"]}22;border-left:4px solid {c["color"]};border-radius:6px;padding:10px;'>
-<b style='color:{c["color"]};font-size:14px;'>CHOCH — {c["direction"]}</b><br>
-<span style='color:#aaa;font-size:12px;'>{c["desc"]}</span>
-</div>""", unsafe_allow_html=True)
-
-                if not bos_data.get("bos") and not bos_data.get("choch"):
-                    st.info("No BOS/CHOCH signal — market in range")
+                    c=bos_data["choch"]; cc=c["color"]
+                    _bd += f"<div style='background:{cc}22;border:2px solid {cc};border-radius:10px;padding:12px;'>"
+                    _bd += f"<div style='font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px;'>CHOCH — Change of Character</div>"
+                    _bd += f"<div style='font-size:18px;font-weight:800;color:{cc};'>{c['direction']}</div>"
+                    _bd += f"<div style='font-size:12px;color:#aaa;margin-top:5px;'>{c['desc']}</div>"
+                    _bd += f"<div style='font-size:11px;color:{cc};margin-top:5px;'>Trend reversal signal — Act fast!</div></div>"
+                else:
+                    _bd += "<div style='background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px;font-size:12px;color:#555;text-align:center;'>No CHOCH — Trend intact</div>"
+                st.markdown(_bd, unsafe_allow_html=True)
             except Exception as _e:
                 st.caption(f"BOS/CHOCH: {str(_e)[:60]}")
 
@@ -4103,19 +4118,39 @@ Last Swing High: Rs.{bos_data.get("last_sh","—")} | Last Swing Low: Rs.{bos_da
 
         with ic1:
             # Liquidity Sweep
-            st.markdown("**Liquidity Sweep (Stop Hunt)**")
+            st.markdown("**Liquidity Sweep + BSL/SSL**")
             try:
+                # EQH/EQL = BSL/SSL
+                _eq2 = detect_equal_levels(chart_df)
+                if _eq2.get("BSL"):
+                    for _bsl_v in _eq2["BSL"][:2]:
+                        _near_b = abs(_bsl_v - price)/price < 0.01
+                        _bh = f"<div style='background:{'#2d0a0a' if _near_b else '#161b22'};border-left:4px solid #e74c3c;border-radius:6px;padding:8px 12px;margin-bottom:5px;'>"
+                        _bh += f"<b style='color:#e74c3c;'>BSL (Buy-Side Liquidity)</b> Rs.{_bsl_v:,.2f}"
+                        _bh += f"{'  ⚡ PRICE NEAR — Sweep risk!' if _near_b else ''}"
+                        _bh += f"<div style='font-size:10px;color:#888;'>Equal Highs — stop hunts above this level</div></div>"
+                        st.markdown(_bh, unsafe_allow_html=True)
+                if _eq2.get("SSL"):
+                    for _ssl_v in _eq2["SSL"][:2]:
+                        _near_s = abs(_ssl_v - price)/price < 0.01
+                        _sh = f"<div style='background:{'#0d2818' if _near_s else '#161b22'};border-left:4px solid #00b880;border-radius:6px;padding:8px 12px;margin-bottom:5px;'>"
+                        _sh += f"<b style='color:#00b880;'>SSL (Sell-Side Liquidity)</b> Rs.{_ssl_v:,.2f}"
+                        _sh += f"{'  ⚡ PRICE NEAR — Bounce zone!' if _near_s else ''}"
+                        _sh += f"<div style='font-size:10px;color:#888;'>Equal Lows — stop hunts below this level</div></div>"
+                        st.markdown(_sh, unsafe_allow_html=True)
+
                 lq = detect_liquidity_sweep(chart_df)
                 if lq:
+                    st.markdown("**Recent Sweeps:**")
                     for sw in lq:
                         sc6=sw["color"]
-                        st.markdown(f"""<div style='background:{"#0d2818" if sc6=="#00b880" else "#2d0a0a"};border:1px solid {sc6};border-radius:8px;padding:10px;margin-bottom:6px;'>
-<div style='font-size:13px;font-weight:700;color:{sc6};'>{sw["type"]}</div>
-<div style='font-size:11px;color:#aaa;margin:4px 0;'>{sw["desc"]}</div>
-<div style='font-size:12px;color:{sc6};font-weight:600;'>Signal: {sw["signal"]} | Swept: Rs.{sw["swept"]} | {sw["date"]}</div>
-</div>""", unsafe_allow_html=True)
+                        _lqh  = f"<div style='background:{'#0d2818' if sc6=='#00b880' else '#2d0a0a'};border:2px solid {sc6};border-radius:8px;padding:10px;margin-bottom:6px;'>"
+                        _lqh += f"<div style='font-size:13px;font-weight:700;color:{sc6};'>{sw['type']}</div>"
+                        _lqh += f"<div style='font-size:11px;color:#aaa;margin:4px 0;'>{sw['desc']}</div>"
+                        _lqh += f"<div style='font-size:12px;color:{sc6};font-weight:600;'>Signal: {sw['signal']} | Swept: Rs.{sw['swept']} | {sw['date']}</div></div>"
+                        st.markdown(_lqh, unsafe_allow_html=True)
                 else:
-                    st.success("No liquidity sweeps — market moving cleanly")
+                    st.success("No liquidity sweeps — market clean")
             except Exception as _lq2: st.caption(f"Sweep: {str(_lq2)[:50]}")
 
             # Premium/Discount
@@ -4165,15 +4200,38 @@ Last Swing High: Rs.{bos_data.get("last_sh","—")} | Last Swing Low: Rs.{bos_da
             try:
                 inst = get_institutional_score(chart_df, stock)
                 isc=inst["color"]; isc2=inst["score"]
-                st.markdown(f"""<div style='background:{isc}22;border:2px solid {isc};border-radius:10px;padding:14px;text-align:center;'>
-<div style='font-size:11px;color:#888;text-transform:uppercase;'>Institutional Grade</div>
-<div style='font-size:36px;font-weight:800;color:{isc};'>{isc2}/100</div>
-<div style='font-size:14px;color:{isc};font-weight:600;'>{inst["grade"]} — {inst["label"]}</div>
-<div style='background:rgba(255,255,255,0.1);border-radius:99px;height:8px;margin:10px 0;'>
-<div style='width:{isc2}%;background:{isc};border-radius:99px;height:8px;'></div></div>
-<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;font-size:10px;'>
-{"".join([f"<div><div style='color:#888;'>{k.title()}</div><div style='color:{isc};font-weight:600;'>{v}</div></div>" for k,v in inst["breakdown"].items()])}
-</div></div>""", unsafe_allow_html=True)
+                bkd=inst.get("breakdown",{}); bkd_mx=inst.get("breakdown_max",{})
+
+                _ish  = f"<div style='background:{isc}22;border:2px solid {isc};border-radius:14px;padding:16px;'>"
+                _ish += f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;'>"
+                _ish += f"<div><div style='font-size:10px;color:#888;text-transform:uppercase;'>Institutional Grade</div>"
+                _ish += f"<div style='font-size:42px;font-weight:900;color:{isc};line-height:1;'>{isc2}/100</div>"
+                _ish += f"<div style='font-size:14px;color:{isc};font-weight:600;'>{inst['grade']} — {inst['label']}</div></div>"
+                _ish += f"<div style='background:rgba(255,255,255,0.06);border-radius:99px;width:80px;height:80px;display:flex;align-items:center;justify-content:center;'>"
+                _ish += f"<div style='font-size:22px;font-weight:900;color:{isc};'>{isc2}</div></div></div>"
+                _ish += f"<div style='background:rgba(255,255,255,0.06);border-radius:99px;height:10px;margin-bottom:14px;'>"
+                _ish += f"<div style='width:{isc2}%;background:{isc};border-radius:99px;height:10px;'></div></div>"
+                # 5-component breakdown
+                comp_map = [
+                    ("Trend",    "trend",    20,  "EMA/ST/ADX"),
+                    ("Volume",   "volume",   20,  "Vol ratio"),
+                    ("Momentum", "momentum", 20,  "RSI/MFI/MACD"),
+                    ("SMC",      "smc",      20,  "OB/FVG/BOS"),
+                    ("Risk/PD",  "risk",     16,  "Premium/Disc"),
+                    ("Options",  "options",   4,  "PCR score"),
+                ]
+                _ish += "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:6px;'>"
+                for comp_name, comp_key, comp_max, comp_desc in comp_map:
+                    comp_val = bkd.get(comp_key, 0)
+                    comp_pct = int(comp_val/comp_max*100)
+                    comp_c   = "#00b880" if comp_pct>=65 else ("#f39c12" if comp_pct>=40 else "#e74c3c")
+                    _ish += f"<div style='background:#161b22;border-radius:6px;padding:8px;text-align:center;border:1px solid {comp_c}44;'>"
+                    _ish += f"<div style='font-size:9px;color:#888;'>{comp_name}</div>"
+                    _ish += f"<div style='font-size:16px;font-weight:700;color:{comp_c};'>{comp_val}/{comp_max}</div>"
+                    _ish += f"<div style='background:rgba(255,255,255,0.05);border-radius:99px;height:4px;margin:4px 0;'><div style='width:{comp_pct}%;background:{comp_c};border-radius:99px;height:4px;'></div></div>"
+                    _ish += f"<div style='font-size:8px;color:#555;'>{comp_desc}</div></div>"
+                _ish += "</div></div>"
+                st.markdown(_ish, unsafe_allow_html=True)
             except Exception as _is: st.caption(f"Inst Score: {str(_is)[:50]}")
 
     # ── TAB: Multi-Timeframe ──────────────────────────────────
