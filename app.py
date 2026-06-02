@@ -3807,11 +3807,11 @@ padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-siz
                 tc = ms.get("trend_color","#f39c12")
                 st.markdown(f"""
 <div style='background:#1a1a2e;border:2px solid {tc};border-radius:10px;padding:14px;margin-bottom:10px;'>
-  <div style='font-size:20px;font-weight:700;color:{tc};'>{ms["trend"]}</div>
+  <div style='font-size:20px;font-weight:700;color:{tc};'>{ms.get("trend", "Unknown")}</div>
   <div style='font-size:12px;color:#aaa;margin-top:6px;'>
-    {"HH" if ms["hh"] else "LH"} + {"HL" if ms["hl"] else "LL"}
+    {("HH" if ms.get("hh") else "LH")} + {("HL" if ms.get("hl") else "LL")}
   </div>
-  {"<div style='margin-top:8px;background:#0d2818;border-radius:6px;padding:8px;font-size:12px;color:#00e5a0;'>" + ms["mss"] + "</div>" if ms.get("mss") else ""}
+  {"<div style='margin-top:8px;background:#0d2818;border-radius:6px;padding:8px;font-size:12px;color:#00e5a0;'>" + ms.get("mss", "") + "</div>" if ms.get("mss") else ""}
 </div>""", unsafe_allow_html=True)
 
             st.markdown("#### Demand / Supply Zones")
