@@ -146,21 +146,6 @@ def ist_str(fmt="%d %b %Y  %H:%M:%S IST"):
 kite = KiteConnect(api_key=API_KEY)
 
 
-# =============================================================
-# GLOBAL UI COLOR VARIABLES FIX
-# =============================================================
-meter_bg = "#001a12"
-meter_color = "#00e5a0"
-
-
-
-# =============================================================
-# GLOBAL UI LABEL FIXES
-# =============================================================
-meter_label = "AI SIGNAL"
-meter_bg = "#001a12"
-meter_color = "#00e5a0"
-
 st.set_page_config(page_title="AI Trading PRO+ v1.3", layout="wide", page_icon="📈")
 
 # =============================================================
