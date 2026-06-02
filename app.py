@@ -2310,8 +2310,6 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     c_supertr= float(last.get("ST_Dir",0)) > 0
     rsi_ob   = float(last.get("RSI",50)) > 75
     rsi_os   = float(last.get("RSI",50)) < 30
-    combined = total_score
-    rsi_os   = float(last.get("RSI",50)) < 30
     tech_checks = {
         "Trend EMA20>EMA50": c_trend, "Price > EMA9": c_ema9,
         "RSI 45-68":         c_rsi,   "MACD > Signal": c_macd,
