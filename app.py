@@ -2216,462 +2216,556 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     c4.metric("📈 ATR",       f"₹{last['ATR']:.2f}")
     c5.metric("🔊 Vol Ratio", f"{last['Vol_Ratio']:.2f}x")
 
-    # ── ULTRA ADVANCED AI ENGINE ─────────────────────────────
-    # Models: XGBoost + LightGBM + RF + GB + AdaBoost
-    # Walk-Forward TimeSeriesSplit Validation
-    # ─────────────────────────────────────────────────────────
-    # Core features — always available after compute_indicators
-    FEAT_COLS_CORE = [
-        "EMA9","EMA20","EMA50","RSI","MACD","MACD_Hist",
-        "Stoch_K","BB_Pct","BB_Width","Vol_Ratio",
-        "Return_1","Return_3","Price_Pos"
-    ]
-    # Extended features — only if enough data
-    FEAT_COLS_EXT = [
-        "RSI_MA","Stoch_D","ADX","MFI","CCI",
-        "Williams_R","OBV"
-    ]
-    # Use extended only if data is sufficient
-    _all_feat = FEAT_COLS_CORE + [f for f in FEAT_COLS_EXT if f in df.columns]
-    feat_cols  = [c for c in _all_feat if c in df.columns]
+    # ══════════════════════════════════════════════════════════
+    # MASTER TRADE DECISION ENGINE — 10 Layer Scoring System
+    # ══════════════════════════════════════════════════════════
 
-    df["T1"] = (df["Close"].shift(-1) > df["Close"] * 1.002).astype(int)
-    df["T3"] = (df["Close"].shift(-3) > df["Close"] * 1.005).astype(int)
-
-    # Fill NaN with forward-fill then 0 — don't drop rows
-    _fd_raw = df[feat_cols].copy()
-    _fd_raw = _fd_raw.ffill().fillna(0)
-    fd = _fd_raw.iloc[20:]   # skip first 20 (indicators warming up)
-
-    ai_prob       = 0.5
-    _data_count   = len(fd)
-    ai_model_name = f"Training... ({_data_count} samples)"
-    ai_confidence = "Low"
-    ai_accuracy   = 0.0
-    feature_importance = {}
-    wf_results    = []   # walk-forward fold accuracies
-
-    if len(fd) >= 40:
+    # LAYER 1: AI Ensemble (20 pts)
+    FEAT_COLS = ["EMA9","EMA20","EMA50","RSI","MACD","MACD_Hist","Stoch_K","BB_Pct",
+                 "BB_Width","Vol_Ratio","Return_1","Return_3","Price_Pos",
+                 "RSI_MA","Stoch_D","ADX","MFI","CCI","Williams_R","OBV"]
+    feat_cols = [c for c in FEAT_COLS if c in df.columns]
+    df["T3"] = (df["Close"].shift(-3) > df["Close"]*1.005).astype(int)
+    df["T1"] = (df["Close"].shift(-1) > df["Close"]*1.002).astype(int)
+    fd_raw   = df[feat_cols].ffill().fillna(0).iloc[20:]
+    ai_prob=0.5; ai_pct=50; ai_accuracy=0.0; ai_confidence="Low"
+    ai_model_name="Default"; feature_importance={}; wf_results=[]
+    ai_model_name_short="RF"
+    if len(fd_raw) >= 40:
         try:
-            scaler   = StandardScaler()
-            # Use T1 if tight data, T3 if enough
-            _target_col = "T3" if len(fd) >= 60 else "T1"
-            td       = df[_target_col].loc[fd.index]
-            td       = td.fillna(0)          # fill any NaN targets
-            td       = td.iloc[:-3]          # remove last 3 (future unknown)
-            fd_clean = fd.loc[td.index]
-            X_all    = scaler.fit_transform(fd_clean.values)
-            y_all    = td.values
-
-            # ── WALK-FORWARD VALIDATION (3-5 folds based on data) ───
-            n_folds = 5 if len(fd_clean) >= 80 else 3
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.model_selection import TimeSeriesSplit
+            from sklearn.metrics import accuracy_score
+            from sklearn.ensemble import (RandomForestClassifier,
+                GradientBoostingClassifier, AdaBoostClassifier)
+            _tc  = "T3" if len(fd_raw)>=60 else "T1"
+            td   = df[_tc].loc[fd_raw.index].fillna(0).iloc[:-3]
+            fd   = fd_raw.loc[td.index]
+            scaler = StandardScaler()
+            X = scaler.fit_transform(fd.values); y = td.values
+            n_folds = 5 if len(X)>=80 else 3
             tscv = TimeSeriesSplit(n_splits=n_folds)
             fold_accs = []
-            for fold_tr, fold_val in tscv.split(X_all):
-                Xf_tr, Xf_val = X_all[fold_tr], X_all[fold_val]
-                yf_tr, yf_val = y_all[fold_tr], y_all[fold_val]
-                if len(set(yf_tr)) < 2 or len(Xf_val) < 2: continue
-                if len(set(yf_val)) < 1: continue
+            for ftr,fval in tscv.split(X):
+                if len(set(y[ftr]))<2 or len(fval)<2: continue
                 try:
-                    _rf = RandomForestClassifier(n_estimators=50,
-                            max_depth=4, random_state=42)
-                    _rf.fit(Xf_tr, yf_tr)
-                    fold_acc = accuracy_score(yf_val, _rf.predict(Xf_val))*100
-                    fold_accs.append(round(fold_acc, 1))
-                except Exception:
-                    continue
-            wf_results = fold_accs if fold_accs else []
-
-            # Final train/val split (last fold — 80/20 fallback for small data)
-            splits = list(tscv.split(X_all))
+                    _rf = RandomForestClassifier(n_estimators=50,max_depth=4,random_state=42)
+                    _rf.fit(X[ftr],y[ftr])
+                    fold_accs.append(round(accuracy_score(y[fval],_rf.predict(X[fval]))*100,1))
+                except: continue
+            wf_results = fold_accs
+            splits = list(tscv.split(X))
             if splits:
-                tr_idx, val_idx = splits[-1]
-            else:
-                cut = int(len(X_all)*0.8)
-                tr_idx = list(range(cut))
-                val_idx = list(range(cut, len(X_all)))
-            X_tr, X_val = X_all[tr_idx], X_all[val_idx]
-            y_tr, y_val = y_all[tr_idx], y_all[val_idx]
+                tr_idx,val_idx = splits[-1]
+                X_tr,X_val = X[tr_idx],X[val_idx]
+                y_tr,y_val = y[tr_idx],y[val_idx]
+                if len(set(y_tr))>=2 and len(X_val)>=2:
+                    model_probs=[]; model_labels=[]; all_imps=[]
+                    if XGB_OK:
+                        try:
+                            import xgboost as xgb
+                            m=xgb.XGBClassifier(n_estimators=min(150,max(50,len(X_tr))),
+                                max_depth=4,learning_rate=0.08,eval_metric="logloss",
+                                random_state=42,verbosity=0)
+                            m.fit(X_tr,y_tr,eval_set=[(X_val,y_val)],verbose=False)
+                            model_probs.append(m.predict_proba(X[-1:])[0][1])
+                            model_labels.append(f"XGB {accuracy_score(y_val,m.predict(X_val))*100:.0f}%")
+                            all_imps.append(dict(zip(feat_cols,m.feature_importances_)))
+                        except: pass
+                    if LGB_OK:
+                        try:
+                            import lightgbm as lgb
+                            m=lgb.LGBMClassifier(n_estimators=min(150,max(50,len(X_tr))),
+                                num_leaves=15,learning_rate=0.08,min_child_samples=3,
+                                random_state=42,verbose=-1)
+                            m.fit(X_tr,y_tr,eval_set=[(X_val,y_val)],
+                                callbacks=[lgb.early_stopping(20,verbose=False),lgb.log_evaluation(-1)])
+                            model_probs.append(m.predict_proba(X[-1:])[0][1])
+                            model_labels.append(f"LGB {accuracy_score(y_val,m.predict(X_val))*100:.0f}%")
+                        except: pass
+                    for Cls,kw in [
+                        (GradientBoostingClassifier,{"n_estimators":150,"max_depth":4,"learning_rate":0.05,"random_state":42}),
+                        (RandomForestClassifier,    {"n_estimators":200,"max_depth":6,"min_samples_leaf":3,"random_state":42}),
+                        (AdaBoostClassifier,        {"n_estimators":100,"learning_rate":0.1,"random_state":42}),
+                    ]:
+                        try:
+                            m=Cls(**kw); m.fit(X_tr,y_tr)
+                            model_probs.append(m.predict_proba(X[-1:])[0][1])
+                            lbl=Cls.__name__[:3]
+                            model_labels.append(f"{lbl} {accuracy_score(y_val,m.predict(X_val))*100:.0f}%")
+                            if hasattr(m,"feature_importances_"):
+                                all_imps.append(dict(zip(feat_cols,m.feature_importances_)))
+                        except: pass
+                    if model_probs:
+                        ai_prob=float(np.mean(model_probs))
+                        ai_pct=round(ai_prob*100)
+                        ai_accuracy=round(float(np.mean([float(l.split()[-1].replace("%","")) for l in model_labels])),1)
+                        ai_model_name=f"{len(model_probs)} models | Acc:{ai_accuracy}%"
+                        ai_model_name_short=f"{len(model_probs)} models"
+                        if all_imps:
+                            comb={}
+                            for d2 in all_imps:
+                                for k2,v2 in d2.items(): comb[k2]=comb.get(k2,0)+v2/len(all_imps)
+                            feature_importance=dict(sorted(comb.items(),key=lambda x:-x[1])[:8])
+                        ai_confidence="High" if ai_accuracy>=65 else ("Medium" if ai_accuracy>=55 else "Low")
+        except: pass
+    ai_layer_score = round(ai_pct*0.20)  # max 20
 
-            # Need at least 2 classes in train set
-            if len(set(y_tr)) < 2 or len(X_val) < 3:
-                raise ValueError("Insufficient class distribution")
-
-            model_probs  = []
-            model_labels = []
-            all_importances = []
-
-            # ── MODEL 1: XGBoost ────────────────────────────
-            if XGB_OK:
-                try:
-                    _n_est = 200 if len(X_tr) >= 100 else 100
-                    xgb_model = xgb.XGBClassifier(
-                        n_estimators=_n_est, max_depth=4,
-                        learning_rate=0.08, subsample=0.8,
-                        colsample_bytree=0.8, reg_alpha=0.1,
-                        eval_metric="logloss", random_state=42,
-                        verbosity=0
-                    )
-                    xgb_model.fit(X_tr, y_tr,
-                        eval_set=[(X_val, y_val)],
-                        verbose=False)
-                    p = xgb_model.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
-                    a = accuracy_score(y_val, xgb_model.predict(X_val)) * 100
-                    model_probs.append(p)
-                    model_labels.append(f"XGBoost {a:.1f}%")
-                    all_importances.append(dict(zip(feat_cols, xgb_model.feature_importances_)))
-                except Exception:
-                    pass
-
-            # ── MODEL 2: LightGBM ───────────────────────────
-            if LGB_OK:
-                try:
-                    _lgb_n = 200 if len(X_tr) >= 100 else 80
-                    lgb_model = lgb.LGBMClassifier(
-                        n_estimators=_lgb_n, num_leaves=15,
-                        learning_rate=0.08, subsample=0.8,
-                        colsample_bytree=0.8, reg_alpha=0.1,
-                        min_child_samples=5,
-                        random_state=42, verbose=-1
-                    )
-                    lgb_model.fit(X_tr, y_tr,
-                        eval_set=[(X_val, y_val)],
-                        callbacks=[lgb.early_stopping(20, verbose=False),
-                                   lgb.log_evaluation(-1)])
-                    p = lgb_model.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
-                    a = accuracy_score(y_val, lgb_model.predict(X_val)) * 100
-                    model_probs.append(p)
-                    model_labels.append(f"LightGBM {a:.1f}%")
-                    all_importances.append(dict(zip(feat_cols,
-                        lgb_model.feature_importances_ / (lgb_model.feature_importances_.sum()+1e-9))))
-                except Exception:
-                    pass
-
-            # ── MODEL 3: Gradient Boosting ──────────────────
-            try:
-                gb = GradientBoostingClassifier(
-                    n_estimators=200, max_depth=4,
-                    learning_rate=0.05, subsample=0.8, random_state=42)
-                gb.fit(X_tr, y_tr)
-                p = gb.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
-                a = accuracy_score(y_val, gb.predict(X_val)) * 100
-                model_probs.append(p)
-                model_labels.append(f"GradBoost {a:.1f}%")
-                all_importances.append(dict(zip(feat_cols, gb.feature_importances_)))
-            except Exception:
-                pass
-
-            # ── MODEL 4: RandomForest ───────────────────────
-            try:
-                rf = RandomForestClassifier(
-                    n_estimators=300, max_depth=6,
-                    min_samples_leaf=5, random_state=42)
-                rf.fit(X_tr, y_tr)
-                p = rf.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
-                a = accuracy_score(y_val, rf.predict(X_val)) * 100
-                model_probs.append(p)
-                model_labels.append(f"RandomForest {a:.1f}%")
-                all_importances.append(dict(zip(feat_cols, rf.feature_importances_)))
-            except Exception:
-                pass
-
-            # ── MODEL 5: AdaBoost ───────────────────────────
-            try:
-                ada = AdaBoostClassifier(
-                    n_estimators=100, learning_rate=0.1, random_state=42)
-                ada.fit(X_tr, y_tr)
-                p = ada.predict_proba(X_all[-1:].reshape(1,-1))[0][1]
-                a = accuracy_score(y_val, ada.predict(X_val)) * 100
-                model_probs.append(p)
-                model_labels.append(f"AdaBoost {a:.1f}%")
-            except Exception:
-                pass
-
-            # ── ENSEMBLE AVERAGE ─────────────────────────────
-            if model_probs:
-                ai_prob      = float(np.mean(model_probs))
-                ai_accuracy  = round(float(np.mean([
-                    float(l.split()[-1].replace("%",""))
-                    for l in model_labels])), 1)
-                model_count  = len(model_probs)
-                ai_model_name = (
-                    f"{'XGB+' if XGB_OK else ''}{'LGB+' if LGB_OK else ''}"
-                    f"GB+RF+Ada ({model_count} models) | "
-                    f"Avg Acc: {ai_accuracy}%"
-                )
-                # Average feature importance
-                if all_importances:
-                    combined = {}
-                    for imp_dict in all_importances:
-                        for k,v in imp_dict.items():
-                            combined[k] = combined.get(k,0) + v/len(all_importances)
-                    feature_importance = dict(sorted(
-                        combined.items(), key=lambda x:-x[1])[:8])
-
-            if   ai_accuracy >= 65: ai_confidence = "High"
-            elif ai_accuracy >= 55: ai_confidence = "Medium"
-            else:                   ai_confidence = "Low"
-
-        except Exception as _ae:
-            try:
-                td2 = df["T1"].loc[fd.index].dropna()
-                fd2 = fd.loc[td2.index]
-                rf2 = RandomForestClassifier(n_estimators=200, random_state=42)
-                rf2.fit(fd2.values[:-1], td2.values[:-1])
-                ai_prob = rf2.predict_proba(fd2.iloc[-1:].values)[0][1]
-                ai_model_name = "RandomForest (fallback)"
-            except Exception:
-                ai_prob = 0.5
-    else:
-        ai_prob = 0.5
-
-    # ── MASTER SIGNAL ENGINE ─────────────────────────────────
-    st.markdown("---")
-
-    # LAYER 1: Technical (30%)
-    c_trend  = last["Close"] > last["EMA20"] > last["EMA50"]
+    # LAYER 2: Technical (20 pts)
+    c_trend  = last["Close"] > last.get("EMA20",0) > last.get("EMA50",0)
     c_ema9   = last["Close"] > last.get("EMA9", last["Close"])
-    c_rsi    = 45 < last["RSI"] < 68
-    c_macd   = last["MACD"] > last["MACD_Signal"]
-    c_macd_h = float(last.get("MACD_Hist", 0)) > 0
-    c_vol    = float(last["Vol_Ratio"]) > 1.1
+    c_rsi    = 45 < float(last.get("RSI",50)) < 68
+    c_macd   = float(last.get("MACD",0)) > float(last.get("MACD_Signal",0))
+    c_macd_h = float(last.get("MACD_Hist",0)) > 0
+    c_vol    = float(last.get("Vol_Ratio",1)) > 1.1
     c_bb     = last["Close"] > float(last.get("BB_Mid", last["Close"]))
-    c_stoch  = float(last.get("Stoch_K", 50)) < 70
-    rsi_ob   = float(last["RSI"]) > 75
-    rsi_os   = float(last["RSI"]) < 30
+    c_stoch  = float(last.get("Stoch_K",50)) < 70
+    c_adx    = float(last.get("ADX",0)) > 20
+    c_mfi    = float(last.get("MFI",50)) > 50
+    c_supertr= float(last.get("ST_Dir",0)) > 0
+    rsi_ob   = float(last.get("RSI",50)) > 75
+    rsi_os   = float(last.get("RSI",50)) < 30
     tech_checks = {
-        "Trend: Price > EMA20 > EMA50": c_trend,
-        "Price above EMA9":             c_ema9,
-        "RSI in zone (45-68)":          c_rsi,
-        "MACD above Signal line":       c_macd,
-        "MACD Histogram positive":      c_macd_h,
-        "Volume surge (>1.1x)":         c_vol,
-        "Price above BB Midline":       c_bb,
-        "Stochastic not overbought":    c_stoch,
+        "Trend EMA20>EMA50": c_trend, "Price > EMA9": c_ema9,
+        "RSI 45-68":         c_rsi,   "MACD > Signal": c_macd,
+        "MACD Hist +ve":     c_macd_h,"Volume surge": c_vol,
+        "Above BB Mid":      c_bb,    "Stoch < 70":  c_stoch,
+        "ADX > 20":          c_adx,   "MFI > 50":    c_mfi,
+        "Supertrend Bull":   c_supertr,
     }
-    tech_score = sum(tech_checks.values())
-    tech_pct   = round(tech_score / len(tech_checks) * 100)
+    tech_score      = sum(tech_checks.values())
+    tech_layer_score= round(tech_score/11*20)
 
-    # LAYER 2: AI (25%)
-    ai_pct = round(ai_prob * 100)
-    c_ai   = ai_prob > 0.55
-    score  = sum([c_trend, c_rsi, c_macd, c_vol, c_ai])
-
-    # LAYER 3: Candlestick (15%)
-    candle_pct = 50; candle_top = "None"
+    # LAYER 3: Market Structure (15 pts)
+    struct_layer_score=5; bos_signal="Unknown"
     try:
-        _cd = df.dropna(subset=["Close","EMA20"]).tail(50).copy()
-        _cd.index = pd.to_datetime(_cd.index)
-        if "ATR" not in _cd.columns:
-            _cd["ATR"] = (_cd["High"]-_cd["Low"]).rolling(14).mean()
-        _pts = detect_candlestick_patterns(_cd)
+        bos_data  = detect_bos_choch(df.tail(60))
+        tr_type   = bos_data.get("trend","Unknown")
+        if tr_type=="Uptrend":    struct_layer_score=15
+        elif tr_type=="Downtrend":struct_layer_score=3
+        else:                     struct_layer_score=8
+        if bos_data.get("choch") and "BULLISH" in bos_data["choch"].get("direction",""):
+            struct_layer_score=min(15,struct_layer_score+4)
+        bos_signal=tr_type
+    except: pass
+
+    # LAYER 4: ICT (15 pts)
+    ict_layer_score=7; ict_signal="Neutral"
+    try:
+        pd_data  = get_premium_discount(df)
+        lq_data  = detect_liquidity_sweep(df.tail(30))
+        kz_data  = get_kill_zones()
+        eq_data  = detect_equal_levels(df.tail(60))
+        ict_pts  = 0
+        if "Discount" in pd_data.get("zone",""):  ict_pts+=5;  ict_signal="Discount zone"
+        elif "Premium" in pd_data.get("zone",""): ict_pts-=3;  ict_signal="Premium zone"
+        else:                                       ict_pts+=2;  ict_signal="Equilibrium"
+        bull_sw=[s for s in lq_data if "Bullish" in s.get("type","")]
+        if bull_sw:       ict_pts+=5; ict_signal="Bullish sweep"
+        if kz_data.get("active"): ict_pts+=3
+        if eq_data.get("near_eql"): ict_pts+=2
+        ict_layer_score=max(0,min(15,ict_pts+5))
+    except: pass
+
+    # LAYER 5: Chart Patterns (10 pts)
+    pattern_layer_score=5; pattern_signal="None"
+    try:
+        cp_list=detect_chart_patterns(df.tail(80))
+        if cp_list:
+            top_p=cp_list[0]
+            if top_p["type"]=="bullish":
+                pattern_layer_score=min(10,5+top_p["strength"])
+                pattern_signal=top_p["pattern"]
+            elif top_p["type"]=="bearish":
+                pattern_layer_score=max(0,5-top_p["strength"])
+                pattern_signal=top_p["pattern"]
+    except: pass
+
+    # LAYER 6: SMC OB+FVG (10 pts)
+    smc_layer_score=5; smc_signal="No OB/FVG"
+    try:
+        obs=find_order_blocks(df.tail(80)); fvgs=find_fvg(df.tail(80))
+        b_ob=[o for o in obs if "Bullish" in o["type"]]
+        b_fvg=[f for f in fvgs if "Bullish" in f["type"]]
+        if b_ob and price<b_ob[-1]["top"]*1.015: smc_layer_score=9; smc_signal="Near Bullish OB"
+        elif b_fvg:                               smc_layer_score=7; smc_signal="Bullish FVG"
+    except: pass
+
+    # LAYER 7: MTF (10 pts)
+    mtf_layer_score=5; mtf_signal="Load MTF tab"
+    try:
+        mtf_c=st.session_state.get("mtf_cache")
+        if mtf_c and mtf_c.get("breakdown"):
+            mtf_layer_score=max(0,min(10,round(mtf_c.get("confluence",50)/10)))
+            mtf_signal=mtf_c.get("signal","Mixed")[:14]
+    except: pass
+
+    # LAYER 8: Volume (5 pts)
+    _vr=float(last.get("Vol_Ratio",1))
+    if _vr>=2.0:   vol_layer_score=5; vol_signal="Very high"
+    elif _vr>=1.5: vol_layer_score=4; vol_signal="Above avg"
+    elif _vr>=1.0: vol_layer_score=3; vol_signal="Normal"
+    else:          vol_layer_score=1; vol_signal="Low vol"
+
+    # LAYER 9: Fibonacci (3 pts)
+    fib_layer_score=1; fib_signal="Not in zone"
+    try:
+        fib_d=get_fibonacci_levels(df)
+        if fib_d.get("in_golden_zone"):      fib_layer_score=3; fib_signal="Golden Zone!"
+        elif abs(fib_d.get("nearest_price",0)-price)/price<0.01:
+            fib_layer_score=2; fib_signal=f"Near {fib_d.get('nearest_level','')[:8]}"
+    except: pass
+
+    # LAYER 10: Candle (2 pts)
+    candle_layer_score=1; candle_signal="None"
+    try:
+        _cd=df.tail(50).copy(); _cd.index=pd.to_datetime(_cd.index)
+        _pts=detect_candlestick_patterns(_cd)
         if _pts:
-            _tp = sorted(_pts, key=lambda x: -x["strength"])[0]
-            candle_top = _tp["pattern"]
-            if _tp["type"]=="bullish":   candle_pct = min(100, 50+_tp["strength"]*10)
-            elif _tp["type"]=="bearish": candle_pct = max(0,   50-_tp["strength"]*10)
-    except Exception:
-        pass
+            _tp=sorted(_pts,key=lambda x:-x["strength"])[0]
+            candle_signal=_tp["pattern"]
+            if _tp["type"]=="bullish": candle_layer_score=min(2,_tp["strength"]//2+1)
+            elif _tp["type"]=="bearish": candle_layer_score=0
+    except: pass
 
-    # LAYER 4: Market Structure (15%)
-    struct_pct = 50; struct_label = "Unknown"
-    try:
-        _sd = df.tail(60).copy()
-        if "ATR" not in _sd.columns:
-            _sd["ATR"] = (_sd["High"]-_sd["Low"]).rolling(14).mean()
-        _ms = detect_market_structure(_sd)
-        if _ms and "hh" in _ms:
-            if   _ms["hh"] and _ms["hl"]: struct_pct=85; struct_label="Uptrend HH+HL"
-            elif _ms["lh"] and _ms["ll"]: struct_pct=20; struct_label="Downtrend LH+LL"
-            else:                          struct_pct=50; struct_label=_ms.get("trend","Ranging")[:18]
-            if _ms.get("mss") and "BULLISH" in _ms.get("mss",""):
-                struct_pct = min(100, struct_pct+15)
-    except Exception:
-        pass
+    # ── TOTAL SCORE ─────────────────────────────────────────
+    raw_score = (ai_layer_score+tech_layer_score+struct_layer_score+
+                 ict_layer_score+pattern_layer_score+smc_layer_score+
+                 mtf_layer_score+vol_layer_score+fib_layer_score+candle_layer_score)
+    raw_score = round(min(raw_score/105*100, 100))
 
-    # LAYER 5: SMC — Order Block + FVG (10%)
-    smc_pct=50; smc_label="No clear OB/FVG"
-    try:
-        _ob_df = df.tail(80).copy()
-        if "ATR" not in _ob_df.columns:
-            _ob_df["ATR"] = (_ob_df["High"]-_ob_df["Low"]).rolling(14).mean()
-        _obs  = find_order_blocks(_ob_df)
-        _fvgs = find_fvg(_ob_df)
-        _b_ob = [o for o in _obs if o["type"]=="Bullish Order Block"]
-        _b_fvg= [f for f in _fvgs if f["type"]=="Bullish FVG"]
-        if _b_ob and price < _b_ob[-1]["top"]*1.02:
-            smc_pct=80; smc_label="Near Bullish OB"
-        elif _b_fvg:
-            smc_pct=70; smc_label="Bullish FVG"
-    except Exception:
-        pass
-
-    # LAYER 6: Volume (5%)
-    _vr = float(last.get("Vol_Ratio",1))
-    if _vr>2.0:   vol_pct=90; vol_label="Very High Vol"
-    elif _vr>1.5: vol_pct=75; vol_label="Above Avg Vol"
-    elif _vr>1.0: vol_pct=55; vol_label="Normal Vol"
-    else:         vol_pct=30; vol_label="Low Vol"
-
-    # MASTER WEIGHTED SCORE
-    master = round(
-        tech_pct   * 0.30 +
-        ai_pct     * 0.25 +
-        candle_pct * 0.15 +
-        struct_pct * 0.15 +
-        smc_pct    * 0.10 +
-        vol_pct    * 0.05
-    )
-
-    # RISK PENALTIES
-    _risks=[]; _pen=0
+    # ── PENALTIES ────────────────────────────────────────────
+    penalties=[]; penalty_pts=0
     if rsi_ob:
-        _pen+=15; _risks.append(("RSI Overbought","Pull back expected","#e74c3c"))
+        penalty_pts+=15; penalties.append(("RSI Overbought >75",-15,"#e74c3c"))
     if _vr<0.7:
-        _pen+=10; _risks.append(("Low Volume","Weak signal — skip","#f39c12"))
+        penalty_pts+=10; penalties.append(("Very Low Volume",-10,"#e07b39"))
     if float(last.get("MACD_Hist",0))<0 and float(last.get("MACD",0))>float(last.get("MACD_Signal",0)):
-        _pen+=5;  _risks.append(("MACD Divergence","Momentum weakening","#f39c12"))
+        penalty_pts+=5;  penalties.append(("MACD Divergence",-5,"#f39c12"))
     try:
-        _sz,_ = find_demand_supply_zones(df.tail(80))
+        _sz,_=find_demand_supply_zones(df.tail(80))
         for _z in _sz:
-            if abs(price-_z["top"])/price < 0.01:
-                _pen+=10; _risks.append(("Near Supply Zone",f"Resistance Rs.{_z['top']}","#e74c3c"))
-    except Exception:
-        pass
-    master = max(0, master - _pen)
+            if abs(price-_z["top"])/price<0.008:
+                penalty_pts+=10; penalties.append((f"Near Supply Rs.{_z['top']}",-10,"#e74c3c")); break
+    except: pass
+    if bos_signal=="Downtrend":
+        penalty_pts+=8; penalties.append(("Downtrend Structure",-8,"#e74c3c"))
+    total_score=max(0,raw_score-penalty_pts)
 
-    # FINAL VERDICT
-    if force_trade:          direction="TRADE";       v_color="#00b880"; v_bg="#003d2a"
-    elif rsi_ob and master<70:direction="NO TRADE";   v_color="#e74c3c"; v_bg="#2d0a0a"
-    elif master>=78:          direction="STRONG BUY"; v_color="#00b880"; v_bg="#003d2a"
-    elif master>=65:          direction="BUY";        v_color="#27ae60"; v_bg="#0a1f10"
-    elif master>=50:          direction="WAIT";       v_color="#f39c12"; v_bg="#1a1200"
-    elif master>=35:          direction="AVOID";      v_color="#e07b39"; v_bg="#2d1800"
-    else:                     direction="NO TRADE";   v_color="#e74c3c"; v_bg="#2d0a0a"
+    # ── FINAL VERDICT ────────────────────────────────────────
+    if force_trade:        verdict="TRADE NOW";    v_color="#00b880"; v_bg="#002d1e"; v_emoji="🚀"
+    elif total_score>=82:  verdict="STRONG BUY";   v_color="#00b880"; v_bg="#002d1e"; v_emoji="🔥"
+    elif total_score>=68:  verdict="BUY";          v_color="#27ae60"; v_bg="#0a1f10"; v_emoji="✅"
+    elif total_score>=52:  verdict="WAIT";         v_color="#f39c12"; v_bg="#1a1200"; v_emoji="⏳"
+    elif total_score>=38:  verdict="AVOID";        v_color="#e07b39"; v_bg="#2d1800"; v_emoji="⚠️"
+    else:                  verdict="DO NOT TRADE"; v_color="#e74c3c"; v_bg="#2d0000"; v_emoji="🚫"
+    signal=verdict in ["STRONG BUY","BUY","TRADE NOW"]
+    direction=verdict
 
-    signal    = direction in ["STRONG BUY","BUY","TRADE"]
-    combined  = master  # keep for compatibility
+    # Trade plan
+    atr_now    = max(float(last.get("ATR",price*0.01)),0.01)
+    _sl_d      = atr_now*mcfg.get("sl_mult",1.5)
+    _tg_d      = _sl_d*mcfg.get("rr",2.0)
+    stop_loss_m= round(price-_sl_d,2)
+    target_m   = round(price+_tg_d,2)
+    qty_m      = max(1,int(capital*(risk/100)/_sl_d))
+    max_loss_rs= round(_sl_d*qty_m,2)
+    max_gain_rs= round(_tg_d*qty_m,2)
+    win_prob   = min(82,round(total_score*0.65+20))
+    _rr_m      = round(_tg_d/_sl_d,1)
+    combined   = total_score
+    master     = total_score
 
-    # TRADE PLAN CALC
-    atr_now      = float(last["ATR"])
-    _sl_d        = atr_now * mcfg.get("sl_mult",1.5)
-    _tg_d        = _sl_d   * mcfg.get("rr",2.0)
-    stop_loss_m  = round(price - _sl_d, 2)
-    target_m     = round(price + _tg_d, 2)
-    qty_m        = max(1, int((capital*(risk/100)) / _sl_d))
-    max_loss_rs  = round(_sl_d * qty_m, 2)
-    max_gain_rs  = round(_tg_d * qty_m, 2)
-    win_prob     = min(82, round(master*0.7+15))
-    _rr_m        = round(_tg_d/_sl_d, 1)
+    # ── PROFESSIONAL TRADE DECISION ENGINE ─────────────────────
+    # ── Build checklist (MUST-HAVE conditions) ───────────────
+    _must = {
+        "Trend Bullish (EMA20>EMA50)":  c_trend,
+        "RSI in safe zone (30-75)":     30 < float(last.get("RSI",50)) < 75,
+        "MACD above Signal":            float(last.get("MACD",0))>float(last.get("MACD_Signal",0)),
+        "Volume above average":         float(last.get("Vol_Ratio",1))>0.9,
+        "Not near Supply Zone":         not any(abs(price-z["top"])/price<0.01
+                                          for z in (find_demand_supply_zones(df.tail(80))[0]
+                                          if len(df)>=20 else [])),
+    }
+    _good = {
+        "Strong volume surge (>1.3x)":  float(last.get("Vol_Ratio",1))>1.3,
+        "Supertrend Bullish":           float(last.get("ST_Dir",0))>0,
+        "AI Model Bullish (>55%)":      ai_prob>0.55,
+        "ADX shows trend strength":     float(last.get("ADX",0))>20,
+        "MFI bullish (>50)":            float(last.get("MFI",50))>50,
+        "Stochastic not overbought":    float(last.get("Stoch_K",50))<75,
+        "Price above VWAP":             price>float(last.get("VWAP",price))*0.998,
+    }
+    _block = {
+        "RSI NOT overbought (>78)":     not (float(last.get("RSI",50))>78),
+        "NOT near major resistance":    True,
+        "Downtrend NOT present":        bos_signal != "Downtrend",
+        "Volume NOT extremely low":     float(last.get("Vol_Ratio",1))>0.5,
+    }
 
-    # RISK WARNINGS HTML
-    _risk_html = "".join([
-        "<div style='background:rgba(231,76,60,0.1);border-left:3px solid " + r[2] + ";border-radius:5px;"
-        "padding:6px 12px;margin-top:6px;font-size:12px;'>"
-        "<span style=\'color:" + r[2] + ";font-weight:600;\'>Warning: " + r[0] + "</span> — " + r[1] + "</div>"
-        for r in _risks
-    ]) if _risks else (
-        "<div style='background:rgba(0,184,128,0.08);border-left:3px solid #00b880;"
-        "border-radius:5px;padding:6px 12px;margin-top:6px;font-size:12px;color:#00b880;'>"
-        "No major risk factors detected</div>"
-    )
+    must_pass   = sum(_must.values())
+    must_total  = len(_must)
+    good_pass   = sum(_good.values())
+    block_pass  = sum(_block.values())
+    block_total = len(_block)
+
+    # Hard blocks: if any blocker fails → NO TRADE regardless of score
+    hard_blocked = block_pass < block_total
+    blockers = [k for k,v in _block.items() if not v]
+    missing_must = [k for k,v in _must.items() if not v]
+
+    # Final GO/NO-GO decision
+    if force_trade:
+        go_decision = "TRADE"
+        go_reason   = "Force signal activated"
+    elif hard_blocked:
+        go_decision = "NO TRADE"
+        go_reason   = f"Blocked: {', '.join(blockers)}"
+    elif must_pass < 4:
+        go_decision = "NO TRADE"
+        go_reason   = f"Only {must_pass}/{must_total} must-have conditions met"
+    elif total_score >= 82 and must_pass == must_total:
+        go_decision = "STRONG BUY"
+        go_reason   = f"All {must_total} conditions ✅ | Score {total_score}/100"
+    elif total_score >= 68 and must_pass >= 4:
+        go_decision = "BUY"
+        go_reason   = f"{must_pass}/{must_total} conditions ✅ | Score {total_score}/100"
+    elif total_score >= 52:
+        go_decision = "WAIT"
+        go_reason   = f"Score {total_score}/100 — Need 68+ to trade"
+    else:
+        go_decision = "NO TRADE"
+        go_reason   = f"Score too low: {total_score}/100 — Need minimum 68"
+
+    is_trade     = go_decision in ["STRONG BUY","BUY","TRADE"]
+    go_color     = "#00b880" if go_decision in ["STRONG BUY","TRADE"] else                    "#27ae60" if go_decision=="BUY" else                    "#f39c12" if go_decision=="WAIT" else "#e74c3c"
+    go_bg        = "#003d2a" if is_trade else ("#1a1200" if go_decision=="WAIT" else "#2d0000")
+    go_emoji     = "🔥" if go_decision=="STRONG BUY" else                    "✅" if go_decision=="BUY" else                    "🚀" if go_decision=="TRADE" else                    "⏳" if go_decision=="WAIT" else "🚫"
+
+    # ── WHAT TO DO NEXT (if no trade) ────────────────────────
+    next_action = []
+    if not is_trade:
+        if not _must["Trend Bullish (EMA20>EMA50)"]:
+            next_action.append("Wait for price to cross above EMA20 and EMA50")
+        if not _must["RSI in safe zone (30-75)"]:
+            next_action.append("Wait for RSI to come below 75 (overbought)")
+        if not _must["MACD above Signal"]:
+            next_action.append("Wait for MACD crossover above Signal line")
+        if not _must["Volume above average"]:
+            next_action.append("Wait for volume to pick up (>1x average)")
+        if float(last.get("RSI",50))>78:
+            next_action.append("RSI >78 — price likely to pullback first, buy dip")
+        if bos_signal == "Downtrend":
+            next_action.append("Market in downtrend — wait for CHOCH or BOS up")
+        if not next_action:
+            next_action.append(f"Score needs to reach 68+ (currently {total_score})")
+
+    # ── LAYER ROWS ────────────────────────────────────────────
+    layer_rows=""
+    layer_data=[
+        ("AI Model",      ai_layer_score,      20, ai_model_name_short),
+        ("Technical",     tech_layer_score,    20, f"{tech_score}/11"),
+        ("Structure",     struct_layer_score,  15, bos_signal[:10]),
+        ("ICT",           ict_layer_score,     15, ict_signal[:12]),
+        ("Chart Pattern", pattern_layer_score, 10, pattern_signal[:10]),
+        ("SMC/OB/FVG",    smc_layer_score,     10, smc_signal[:10]),
+        ("MTF 4-TF",      mtf_layer_score,     10, mtf_signal[:12]),
+        ("Volume",        vol_layer_score,       5, vol_signal[:10]),
+        ("Fibonacci",     fib_layer_score,       3, fib_signal[:10]),
+        ("Candle",        candle_layer_score,    2, candle_signal[:10]),
+    ]
+    for lbl,v,mx,note in layer_data:
+        pct=int(v/mx*100)
+        c="#00b880" if v>=int(mx*0.65) else ("#f39c12" if v>=int(mx*0.4) else "#e74c3c")
+        layer_rows += (
+            f"<div style='background:rgba(0,0,0,0.4);border-radius:7px;padding:9px 6px;"
+            f"text-align:center;border:1px solid {c}33;'>"
+            f"<div style='font-size:9px;color:#666;margin-bottom:3px;'>{lbl}</div>"
+            f"<div style='font-size:16px;font-weight:700;color:{c};'>{v}/{mx}</div>"
+            f"<div style='background:rgba(255,255,255,0.05);border-radius:99px;height:4px;margin:4px 0;'>"
+            f"<div style='width:{pct}%;background:{c};border-radius:99px;height:4px;'></div></div>"
+            f"<div style='font-size:8px;color:#555;'>{note}</div></div>"
+        )
+
+    penalty_rows=""
+    if penalties:
+        for rn,rp,rc in penalties:
+            penalty_rows+=(f"<div style='background:rgba(0,0,0,0.3);border-left:3px solid {rc};"
+                f"border-radius:5px;padding:6px 12px;margin-top:5px;font-size:12px;"
+                f"display:flex;justify-content:space-between;'>"
+                f"<span style='color:{rc};font-weight:600;'>⚠ {rn}</span>"
+                f"<span style='color:{rc};'>{rp} pts</span></div>")
+    else:
+        penalty_rows=(
+            "<div style='background:rgba(0,184,128,0.08);border-left:3px solid #00b880;"
+            "border-radius:5px;padding:6px 12px;margin-top:5px;font-size:12px;color:#00b880;'>"
+            "✅ No risk factors — clean setup</div>")
+
+    # ── MUST-HAVE CHECKLIST HTML ──────────────────────────────
+    must_rows = ""
+    for cond, val in _must.items():
+        ic = "#00b880" if val else "#e74c3c"
+        must_rows += (f"<div style='display:flex;align-items:center;gap:8px;"
+                      f"padding:5px 0;border-bottom:1px solid #1a1a2e;'>"
+                      f"<span style='font-size:16px;'>{'✅' if val else '❌'}</span>"
+                      f"<span style='font-size:12px;color:{'#ccc' if val else '#e74c3c'};'>{cond}</span>"
+                      f"</div>")
+
+    good_rows = ""
+    for cond, val in _good.items():
+        ic = "#00b880" if val else "#888"
+        good_rows += (f"<div style='display:flex;align-items:center;gap:8px;padding:4px 0;'>"
+                      f"<span style='font-size:13px;'>{'🟢' if val else '⚪'}</span>"
+                      f"<span style='font-size:11px;color:{'#aaa' if val else '#555'};'>{cond}</span>"
+                      f"</div>")
+
+    next_html = ""
+    if next_action:
+        next_html = "<div style='margin-top:10px;'>"
+        next_html += "<div style='font-size:11px;color:#f39c12;font-weight:600;margin-bottom:6px;'>What to do next:</div>"
+        for act in next_action[:3]:
+            next_html += f"<div style='font-size:11px;color:#888;padding:3px 0;'>→ {act}</div>"
+        next_html += "</div>"
 
     st.markdown(f"""
-<div style='background:{v_bg};border:3px solid {v_color};border-radius:16px;padding:22px 26px;margin-bottom:16px;'>
+<div style='background:{go_bg};border:3px solid {go_color};border-radius:20px;
+padding:0;margin:12px 0;overflow:hidden;'>
 
-  <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;'>
+  <!-- TOP VERDICT BAR -->
+  <div style='background:{go_color}22;padding:20px 24px;border-bottom:1px solid {go_color}44;'>
+    <div style='display:flex;justify-content:space-between;align-items:center;'>
+      <div>
+        <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;'>
+          TRADE DECISION — {stock.replace(".NS","")} | {selected_mode} | {now_ist().strftime("%H:%M IST")}
+        </div>
+        <div style='font-size:44px;font-weight:900;color:{go_color};line-height:1;letter-spacing:-.5px;'>
+          {go_emoji} {go_decision}
+        </div>
+        <div style='font-size:13px;color:#aaa;margin-top:6px;'>{go_reason}</div>
+      </div>
+      <div style='text-align:right;'>
+        <div style='font-size:64px;font-weight:900;color:{go_color};line-height:1;'>{total_score}</div>
+        <div style='font-size:11px;color:#888;'>/ 100 pts</div>
+        <div style='font-size:11px;color:#888;margin-top:4px;'>
+          Must: {must_pass}/{must_total} ✓ | Good: {good_pass}/{len(_good)}
+        </div>
+      </div>
+    </div>
+
+    <!-- SCORE BAR -->
+    <div style='background:rgba(255,255,255,0.08);border-radius:99px;height:16px;
+    margin:16px 0 6px;position:relative;overflow:hidden;'>
+      <div style='width:{total_score}%;background:linear-gradient(90deg,{go_color}77,{go_color});
+      border-radius:99px;height:16px;box-shadow:0 0 16px {go_color}55;'></div>
+      <div style='position:absolute;left:38%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>
+      <div style='position:absolute;left:52%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>
+      <div style='position:absolute;left:68%;top:0;width:2px;height:16px;background:#27ae60;opacity:0.5;'></div>
+      <div style='position:absolute;left:82%;top:0;width:2px;height:16px;background:#00b880;opacity:0.7;'></div>
+    </div>
+    <div style='display:flex;justify-content:space-between;font-size:9px;color:#444;'>
+      <span>0</span><span style='color:#e07b39;'>38 AVOID</span>
+      <span style='color:#f39c12;'>52 WAIT</span>
+      <span style='color:#27ae60;'>68 BUY ▲</span>
+      <span style='color:#00b880;'>82 STRONG ▲</span>
+      <span>100</span>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT GRID -->
+  <div style='padding:18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:18px;'>
+
+    <!-- LEFT: CHECKLIST -->
     <div>
-      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;'>
-        MASTER SIGNAL — {stock.replace(".NS","")} {selected_mode}
+      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;'>
+        Must-Have Conditions ({must_pass}/{must_total})
       </div>
-      <div style='font-size:40px;font-weight:800;color:{v_color};line-height:1;'>{direction}</div>
-      <div style='font-size:12px;color:#aaa;margin-top:4px;'>
-        6-layer analysis: Technical + AI + Candles + Structure + SMC + Volume
+      {must_rows}
+      <div style='margin-top:12px;font-size:11px;color:#888;text-transform:uppercase;
+      letter-spacing:.06em;margin-bottom:6px;'>Bonus Conditions ({good_pass}/{len(_good)})</div>
+      {good_rows}
+      {next_html}
+    </div>
+
+    <!-- RIGHT: SCORES + PLAN -->
+    <div>
+      <!-- Layer scores -->
+      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>
+        Score Breakdown (10 Layers)
+      </div>
+      <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:14px;'>
+        {layer_rows}
+      </div>
+
+      <!-- Trade Plan -->
+      <div style='background:rgba(0,0,0,0.4);border-radius:10px;padding:12px;margin-bottom:10px;'>
+        <div style='font-size:10px;color:#888;text-transform:uppercase;margin-bottom:8px;'>Trade Plan</div>
+        <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center;'>
+          <div><div style='font-size:9px;color:#888;'>Entry</div>
+          <div style='font-size:13px;font-weight:600;color:#e6edf3;'>Rs.{price:.2f}</div></div>
+          <div><div style='font-size:9px;color:#e74c3c;'>Stop Loss</div>
+          <div style='font-size:13px;font-weight:600;color:#e74c3c;'>Rs.{stop_loss_m}</div></div>
+          <div><div style='font-size:9px;color:#00b880;'>Target</div>
+          <div style='font-size:13px;font-weight:600;color:#00b880;'>Rs.{target_m}</div></div>
+          <div><div style='font-size:9px;color:#f39c12;'>R:R</div>
+          <div style='font-size:13px;font-weight:600;color:#f39c12;'>{_rr_m}:1</div></div>
+          <div><div style='font-size:9px;color:#a78bfa;'>Qty</div>
+          <div style='font-size:13px;font-weight:600;color:#a78bfa;'>{qty_m} sh</div></div>
+        </div>
+      </div>
+
+      <!-- Win/Loss stats -->
+      <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;'>
+        <div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);
+        border-radius:8px;padding:8px;text-align:center;'>
+          <div style='font-size:9px;color:#888;'>Win Prob</div>
+          <div style='font-size:22px;font-weight:700;color:#00b880;'>{win_prob}%</div>
+        </div>
+        <div style='background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.25);
+        border-radius:8px;padding:8px;text-align:center;'>
+          <div style='font-size:9px;color:#888;'>Max Loss</div>
+          <div style='font-size:18px;font-weight:700;color:#e74c3c;'>Rs.{max_loss_rs:,.0f}</div>
+        </div>
+        <div style='background:rgba(0,184,128,0.1);border:1px solid rgba(0,184,128,0.25);
+        border-radius:8px;padding:8px;text-align:center;'>
+          <div style='font-size:9px;color:#888;'>Max Gain</div>
+          <div style='font-size:18px;font-weight:700;color:#00b880;'>Rs.{max_gain_rs:,.0f}</div>
+        </div>
       </div>
     </div>
-    <div style='text-align:right;'>
-      <div style='font-size:52px;font-weight:800;color:{v_color};line-height:1;'>{master}%</div>
-      <div style='font-size:12px;color:#888;'>Overall Confidence</div>
+  </div>
+
+  <!-- PENALTIES / RISK WARNINGS -->
+  <div style='padding:0 24px 18px;'>
+    {penalty_rows}
+    <div style='margin-top:8px;font-size:10px;color:#444;text-align:center;'>
+      Raw Score:{raw_score} − Penalties:{penalty_pts} = Final:{total_score}/100
+      | Min 68 to BUY | Min 82 for STRONG BUY
     </div>
-  </div>
-
-  <div style='background:rgba(255,255,255,0.08);border-radius:99px;height:18px;margin-bottom:6px;position:relative;'>
-    <div style='width:{master}%;background:linear-gradient(90deg,{v_color}88,{v_color});
-    border-radius:99px;height:18px;box-shadow:0 0 14px {v_color}55;'></div>
-    <div style='position:absolute;left:35%;top:-6px;width:2px;height:30px;background:#e07b39;opacity:0.5;'></div>
-    <div style='position:absolute;left:50%;top:-6px;width:2px;height:30px;background:#f39c12;opacity:0.5;'></div>
-    <div style='position:absolute;left:65%;top:-6px;width:2px;height:30px;background:#27ae60;opacity:0.5;'></div>
-    <div style='position:absolute;left:78%;top:-6px;width:2px;height:30px;background:#00b880;opacity:0.7;'></div>
-  </div>
-  <div style='display:flex;justify-content:space-between;font-size:10px;color:#555;margin-bottom:16px;'>
-    <span>0 NO TRADE</span>
-    <span style='color:#e07b39;'>35 AVOID</span>
-    <span style='color:#f39c12;'>50 WAIT</span>
-    <span style='color:#27ae60;'>65 BUY</span>
-    <span style='color:#00b880;'>78 STRONG</span>
-    <span>100</span>
-  </div>
-
-  <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;'>
-    {"".join([
-      "<div style='background:rgba(0,0,0,0.35);border-radius:8px;padding:10px;text-align:center;border:1px solid " +
-      ("#00b880" if v>=65 else ("#f39c12" if v>=45 else "#e74c3c")) + "33;'>" +
-      "<div style='font-size:10px;color:#888;margin-bottom:3px;'>" + lbl + "</div>" +
-      "<div style='font-size:22px;font-weight:700;color:" +
-      ("#00b880" if v>=65 else ("#f39c12" if v>=45 else "#e74c3c")) + ";'>" + str(v) + "%</div>" +
-      "<div style='font-size:10px;color:#666;'>" + sub + "</div></div>"
-      for lbl,v,sub in [
-        ("Technical 30%",  tech_pct,    str(tech_score)+"/8 checks"),
-        ("AI Model 25%",   ai_pct,      "Bullish" if ai_pct>=60 else ("Neutral" if ai_pct>=40 else "Bearish")),
-        ("Candlestick 15%",candle_pct,  candle_top[:14]),
-        ("Structure 15%",  struct_pct,  struct_label[:17]),
-        ("SMC 10%",        smc_pct,     smc_label[:15]),
-        ("Volume 5%",      vol_pct,     vol_label[:14]),
-      ]
-    ])}
-  </div>
-
-  <div style='background:rgba(0,0,0,0.3);border-radius:10px;padding:12px 16px;margin-bottom:10px;'>
-    <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>Trade Plan</div>
-    <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center;'>
-      <div><div style='font-size:10px;color:#888;'>Entry</div><div style='font-size:14px;font-weight:600;color:#e6edf3;'>Rs.{price:.2f}</div></div>
-      <div><div style='font-size:10px;color:#e74c3c;'>Stop Loss</div><div style='font-size:14px;font-weight:600;color:#e74c3c;'>Rs.{stop_loss_m}</div></div>
-      <div><div style='font-size:10px;color:#00b880;'>Target</div><div style='font-size:14px;font-weight:600;color:#00b880;'>Rs.{target_m}</div></div>
-      <div><div style='font-size:10px;color:#f39c12;'>R:R</div><div style='font-size:14px;font-weight:600;color:#f39c12;'>{_rr_m}:1</div></div>
-      <div><div style='font-size:10px;color:#a78bfa;'>Qty</div><div style='font-size:14px;font-weight:600;color:#a78bfa;'>{qty_m} sh</div></div>
-    </div>
-  </div>
-
-  <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;'>
-    <div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);border-radius:8px;padding:10px;text-align:center;'>
-      <div style='font-size:10px;color:#888;'>Win Probability</div>
-      <div style='font-size:24px;font-weight:700;color:#00b880;'>{win_prob}%</div>
-      <div style='font-size:10px;color:#666;'>Score-based estimate</div>
-    </div>
-    <div style='background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.25);border-radius:8px;padding:10px;text-align:center;'>
-      <div style='font-size:10px;color:#888;'>Max Loss if SL hits</div>
-      <div style='font-size:24px;font-weight:700;color:#e74c3c;'>Rs.{max_loss_rs:,.0f}</div>
-      <div style='font-size:10px;color:#666;'>SL at Rs.{stop_loss_m}</div>
-    </div>
-    <div style='background:rgba(0,184,128,0.1);border:1px solid rgba(0,184,128,0.25);border-radius:8px;padding:10px;text-align:center;'>
-      <div style='font-size:10px;color:#888;'>Max Gain if Target hits</div>
-      <div style='font-size:24px;font-weight:700;color:#00b880;'>Rs.{max_gain_rs:,.0f}</div>
-      <div style='font-size:10px;color:#666;'>Target Rs.{target_m}</div>
-    </div>
-  </div>
-
-  {_risk_html}
-
-  <div style='margin-top:10px;font-size:10px;color:#555;text-align:center;'>
-    Penalty: -{_pen}pts applied | Score = Tech30%+AI25%+Candle15%+Structure15%+SMC10%+Vol5%
   </div>
 </div>""", unsafe_allow_html=True)
 
     if signal and ALERT_ON_SIGNAL:
-        fire_alert(f"{direction} [{selected_mode}]", stock, price,
-                   qty_m, stop_loss_m, target_m, master, mode)
+        fire_alert(f"{verdict} [{selected_mode}]", stock, price,
+                   qty_m, stop_loss_m, target_m, total_score, order_mode)
 
-    col_sig, col_pos = st.columns(2)
+    with st.expander("🔍 Full Layer Breakdown"):
+        _dc1, _dc2 = st.columns(2)
+        with _dc1:
+            st.markdown("**Technical Checks:**")
+            for k,v in tech_checks.items():
+                st.markdown(f"{'✅' if v else '❌'} {k}")
+        with _dc2:
+            st.markdown(f"**AI: {ai_model_name}**")
+            if wf_results:
+                avg_wf=round(sum(wf_results)/len(wf_results),1)
+                st.caption(f"Walk-forward: {wf_results} | Avg:{avg_wf}%")
+            if feature_importance:
+                st.markdown("**Top Features:**")
+                for fn,fi in list(feature_importance.items())[:5]:
+                    st.markdown(f"`{fn}` {fi:.3f}")
+
+
+        col_sig, col_pos = st.columns(2)
     with col_sig:
         st.markdown("#### Detailed Layer Checks")
         all_checks_display = {
