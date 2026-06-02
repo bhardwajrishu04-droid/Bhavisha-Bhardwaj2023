@@ -1676,6 +1676,20 @@ def detect_chart_patterns(df):
                 "BUY on breakout" if direction=="bullish" else "SELL on breakdown",
                 f"Converging pennant after strong move",None)
 
+    # ── CUP & HANDLE ─────────────────────────────────────────
+    if n >= 40:
+        try:
+            seg_c = closes[-40:]
+            left  = float(max(seg_c[:10]))
+            cup   = float(min(seg_c[10:30]))
+            right = float(max(seg_c[30:]))
+            handle= float(min(seg_c[-8:]))
+            if abs(left-right)/left<0.04 and cup<left*0.85 and handle>cup and handle<right*0.97 and float(closes[-1])>handle:
+                add("Cup & Handle","bullish",5,"STRONG BUY",
+                    f"C&H pattern — Cup Rs.{round(cup,0)} | Handle Rs.{round(handle,0)} | Breakout!",
+                    round(right+(right-cup),2))
+        except Exception: pass
+
     return sorted(patterns, key=lambda x:-x["strength"])
 
 
@@ -1803,9 +1817,12 @@ def get_mtf_confluence(_stock: str) -> dict:
     elif len(bear_tfs)==2: signal = "SELL — Most TFs bearish"
     else:                  signal = "MIXED — Wait for alignment"
 
+    majority  = "BULLISH" if len(bull_tfs)>=len(bear_tfs) else "BEARISH"
+    align_pct = round(max(len(bull_tfs),len(bear_tfs))/max(len(results),1)*100)
     return {"confluence": avg_pct, "signal": signal,
             "breakdown": results, "bull_count": len(bull_tfs),
-            "bear_count": len(bear_tfs)}
+            "bear_count": len(bear_tfs),
+            "majority": majority, "align_pct": align_pct}
 
 
 # ── 10. INSTITUTIONAL SCORE ENGINE ───────────────────────────
@@ -1856,11 +1873,14 @@ def get_institutional_score(df, stock: str) -> dict:
     except Exception:
         scores["smc"] = 10
 
-    # 5. Risk/Reward Quality (0-20)
+    # 5. Risk/Reward Quality (0-16)
     bb_pct = float(df.get("BB_Pct", pd.Series([0.5])).iloc[-1])
     pd_r   = get_premium_discount(df)
     rr_ok  = "Discount" in pd_r.get("zone","")
-    scores["risk"] = min(20, int((1-bb_pct)*10 + rr_ok*10))
+    scores["risk"] = min(16, int((1-bb_pct)*8 + rr_ok*8))
+
+    # 6. Options PCR Score (0-4)
+    scores["options"] = 0
 
     total = sum(scores.values())
     if   total >= 80: grade,label = "A+","Institutional BUY"
@@ -2012,6 +2032,104 @@ def get_correlation_filter(_stock: str, universe: tuple) -> dict:
         }
     except Exception as e:
         return {"status": "error", "error": str(e), "correlations": {}}
+
+
+# =============================================================
+# AI EXPLAINABILITY + TRADING ADVISOR
+# =============================================================
+def build_ai_explanation(last, price, ai_prob, ai_pct,
+                          bos_data, ob_list, fvg_list,
+                          patterns, vol_ratio, rsi_val,
+                          total_score) -> dict:
+    bull = []; bear = []; warn = []
+    ema20=float(last.get("EMA20",price)); ema50=float(last.get("EMA50",price))
+    macd=float(last.get("MACD",0)); macs=float(last.get("MACD_Signal",0))
+    adx=float(last.get("ADX",0)); mfi=float(last.get("MFI",50))
+    if price>ema20>ema50: bull.append(("Trend Bullish","Price above EMA20 & EMA50"))
+    else: bear.append(("Trend Bearish","Price below EMAs — downtrend"))
+    if macd>macs: bull.append(("MACD Bullish","MACD above Signal — bullish momentum"))
+    if adx>25: bull.append(("Strong Trend",f"ADX {adx:.0f} — trend confirmed"))
+    if mfi>60: bull.append(("Money Flow +ve",f"MFI {mfi:.0f} — institutional buying"))
+    elif mfi<40: bear.append(("Money Flow -ve",f"MFI {mfi:.0f} — selling pressure"))
+    if ai_prob>0.65: bull.append(("AI Ensemble Bullish",f"AI {ai_pct}% bullish — strong"))
+    elif ai_prob>0.55: bull.append(("AI Model Bullish",f"AI {ai_pct}% — mild bullish"))
+    elif ai_prob<0.40: bear.append(("AI Model Bearish",f"AI only {ai_pct}% — bearish"))
+    if vol_ratio>2.0: bull.append(("Volume Spike",f"Volume {vol_ratio:.1f}x — institutional activity"))
+    elif vol_ratio>1.3: bull.append(("Above Avg Volume",f"Volume {vol_ratio:.1f}x confirmed"))
+    elif vol_ratio<0.7: warn.append(("Low Volume",f"Volume {vol_ratio:.1f}x — weak signal"))
+    if 50<rsi_val<65: bull.append(("RSI Healthy",f"RSI {rsi_val:.0f} — not overbought"))
+    elif rsi_val>75: warn.append(("RSI Overbought",f"RSI {rsi_val:.0f} — pullback possible"))
+    elif rsi_val<30: bull.append(("RSI Oversold",f"RSI {rsi_val:.0f} — bounce zone"))
+    if bos_data:
+        if bos_data.get("trend")=="Uptrend": bull.append(("HH+HL Uptrend","Higher highs + lows — accumulation"))
+        elif bos_data.get("trend")=="Downtrend": bear.append(("LH+LL Downtrend","Lower highs + lows — distribution"))
+        if bos_data.get("bos") and "BULLISH" in bos_data["bos"].get("direction",""): bull.append(("BOS Confirmed","Break of Structure — trend continues"))
+        if bos_data.get("choch") and "BULLISH" in bos_data["choch"].get("direction",""): bull.append(("CHOCH Signal","Change of Character — reversal"))
+    if ob_list:
+        b_ob=[o for o in ob_list if "Bullish" in o.get("type","")]
+        if b_ob: bull.append(("Bullish Order Block",f"Institutional buy zone Rs.{b_ob[-1].get('bottom',0):.0f}"))
+    if fvg_list:
+        b_fvg=[f for f in fvg_list if "Bullish" in f.get("type","")]
+        if b_fvg: bull.append(("Bullish FVG",f"Fair Value Gap at Rs.{b_fvg[-1].get('bottom',0):.0f}"))
+    if patterns:
+        bp=[p for p in patterns if p["type"]=="bullish"]
+        brp=[p for p in patterns if p["type"]=="bearish"]
+        if bp: bull.append(("Chart Pattern",f"{bp[0]['pattern']} — {bp[0]['signal']}"))
+        if brp: bear.append(("Chart Pattern",f"{brp[0]['pattern']} — {brp[0]['signal']}"))
+    return {"bull":bull,"bear":bear,"warn":warn,"conf":min(95,round(total_score*0.85+10))}
+
+
+def build_trading_advisor(user_name, stock_name, expl, total_score,
+                           verdict, price, sl, tgt, qty, max_loss,
+                           max_gain, rr, win_prob, mtf_data=None) -> str:
+    name = user_name if user_name and user_name!="admin" else "Investor"
+    bull = expl["bull"]; bear = expl["bear"]; warn = expl["warn"]
+    conf = expl["conf"]
+    out = []
+    out.append(f"**{name} ji,**")
+    out.append("")
+    if total_score>=82:
+        out.append(f"**{stock_name}** mein aaj **strong bullish setup** hai. Trade lene ka sahi time!")
+    elif total_score>=68:
+        out.append(f"**{stock_name}** mein **bullish signal** hai. Setup decent — entry consider kar sakte hain.")
+    elif total_score>=52:
+        out.append(f"**{stock_name}** mein abhi **mixed signals** hain. Thoda aur confirmation ka wait karo.")
+    else:
+        out.append(f"**{stock_name}** mein abhi **trade mat lo**. Setup weak hai.")
+    out.append("")
+    if bull:
+        out.append("**Kyu bullish hai:**")
+        for lbl,desc in bull[:5]: out.append(f"✅ **{lbl}:** {desc}")
+        out.append("")
+    if warn:
+        out.append("**Dhyan rakho:**")
+        for lbl,desc in warn[:3]: out.append(f"⚠️ **{lbl}:** {desc}")
+        out.append("")
+    if mtf_data and mtf_data.get("breakdown"):
+        out.append("**Timeframe alignment:**")
+        for tf,d in mtf_data["breakdown"].items():
+            ic = "🟢" if d["direction"]=="BULLISH" else ("🔴" if d["direction"]=="BEARISH" else "🟡")
+            out.append(f"{ic} {tf}: {d['direction']} ({d['pct']}%)")
+        out.append(f"📊 Alignment: **{mtf_data.get('align_pct',50)}%**")
+        out.append("")
+    if verdict in ["STRONG BUY","BUY","TRADE NOW"]:
+        out.append("**Trade Plan:**")
+        out.append(f"• Entry: **Rs.{price:.2f}**")
+        out.append(f"• Stop Loss: **Rs.{sl}**")
+        out.append(f"• Target: **Rs.{tgt}**")
+        out.append(f"• Qty: **{qty} shares** | R:R {rr}:1")
+        out.append(f"• Max Loss: Rs.{max_loss:,.0f} | Max Gain: Rs.{max_gain:,.0f}")
+        out.append(f"• Win Probability: **{win_prob}%**")
+        out.append("")
+        out.append("*SL kabhi mat hatao. Risk management sabse important hai.*")
+    else:
+        out.append("**Kya karein abhi?**")
+        out.append(f"• Score 68+ ka wait karo (abhi {total_score}/100)")
+        out.append("• Volume surge ke saath confirm hone pe entry lena")
+        out.append("• Aaj watchlist mein rakho")
+    out.append(f"\n*AI Confidence: {conf}% | Score: {total_score}/100*")
+    return "\n".join(out)
+
 
 # =============================================================
 # MAIN DASHBOARD
@@ -2681,6 +2799,70 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 
         fire_alert(f"{verdict} [{selected_mode}]", stock, price,
                    qty_m, stop_loss_m, target_m, total_score, order_mode)
+
+    # ── AI EXPLAINABILITY ─────────────────────────────────────
+    try:
+        _bos2 = detect_bos_choch(df.tail(60)) if len(df)>=60 else {}
+        _ob2  = find_order_blocks(df.tail(60))
+        _fvg2 = find_fvg(df.tail(50))
+        _cp2  = detect_chart_patterns(chart_df)
+        _expl = build_ai_explanation(
+            last, price, ai_prob, ai_pct, _bos2, _ob2, _fvg2, _cp2,
+            float(last.get("Vol_Ratio",1)), float(last.get("RSI",50)), total_score)
+    except Exception:
+        _expl = {"bull":[],"bear":[],"warn":[],"conf":total_score}
+
+    _bull=_expl["bull"]; _bear=_expl["bear"]; _warn=_expl["warn"]; _conf=_expl["conf"]
+    _ec="#00b880" if _conf>=70 else ("#f39c12" if _conf>=50 else "#e74c3c")
+    _eh ="<div style='background:#0d1117;border:2px solid #21262d;border-radius:14px;padding:18px;margin:10px 0;'>"
+    _eh+="<div style='font-size:13px;font-weight:700;color:#e6edf3;margin-bottom:14px;'>AI Signal Explanation</div>"
+    _eh+="<div style='display:grid;grid-template-columns:1fr 1fr;gap:14px;'>"
+    _eh+="<div><div style='font-size:11px;color:#00b880;font-weight:600;margin-bottom:8px;'>BULLISH FACTORS</div>"
+    for _l,_d in _bull[:6]:
+        _eh+=f"<div style='background:#0d2818;border-left:3px solid #00b880;border-radius:5px;padding:6px 10px;margin-bottom:5px;'><b style='color:#00b880;font-size:12px;'>{_l}</b><br><span style='color:#888;font-size:11px;'>{_d}</span></div>"
+    if not _bull: _eh+="<div style='color:#555;font-size:11px;'>No bullish factors</div>"
+    _eh+="</div><div>"
+    if _bear:
+        _eh+="<div style='font-size:11px;color:#e74c3c;font-weight:600;margin-bottom:8px;'>BEARISH FACTORS</div>"
+        for _l,_d in _bear[:4]:
+            _eh+=f"<div style='background:#2d0a0a;border-left:3px solid #e74c3c;border-radius:5px;padding:6px 10px;margin-bottom:5px;'><b style='color:#e74c3c;font-size:12px;'>{_l}</b><br><span style='color:#888;font-size:11px;'>{_d}</span></div>"
+    if _warn:
+        _eh+="<div style='font-size:11px;color:#f39c12;font-weight:600;margin-bottom:8px;margin-top:6px;'>WARNINGS</div>"
+        for _l,_d in _warn[:3]:
+            _eh+=f"<div style='background:#1a1200;border-left:3px solid #f39c12;border-radius:5px;padding:6px 10px;margin-bottom:5px;'><b style='color:#f39c12;font-size:12px;'>{_l}</b><br><span style='color:#888;font-size:11px;'>{_d}</span></div>"
+    if not _bear and not _warn: _eh+="<div style='background:#0d2818;border-radius:8px;padding:10px;color:#00b880;font-size:12px;'>Clean setup — no major risks!</div>"
+    _eh+="</div></div>"
+    _eh+=f"<div style='margin-top:12px;padding-top:10px;border-top:1px solid #21262d;display:flex;justify-content:space-between;align-items:center;'>"
+    _eh+=f"<span style='font-size:11px;color:#888;'>{len(_bull)} bullish · {len(_bear)} bearish · {len(_warn)} warnings</span>"
+    _eh+=f"<span style='font-size:14px;font-weight:700;color:{_ec};'>Confidence: {_conf}%</span></div>"
+    _eh+=f"<div style='background:rgba(255,255,255,0.06);border-radius:99px;height:6px;margin-top:6px;'><div style='width:{_conf}%;background:{_ec};border-radius:99px;height:6px;'></div></div></div>"
+    st.markdown(_eh, unsafe_allow_html=True)
+
+    with st.expander("AI Trading Advisor — Personal Advice"):
+        try:
+            _mtf_adv = st.session_state.get("mtf_cache")
+            _advice  = build_trading_advisor(
+                user, stock.replace(".NS",""), _expl, total_score, verdict,
+                price, stop_loss_m, target_m, qty_m,
+                max_loss_rs, max_gain_rs, _rr_m, win_prob, _mtf_adv)
+            st.markdown(_advice)
+        except Exception as _ae:
+            st.caption(f"Advisor: {str(_ae)[:60]}")
+        st.markdown("---")
+        st.markdown("**Weighted Score Breakdown:**")
+        for _sl2,_sc,_mx,_ds in [
+            ("Technical",tech_layer_score,20,"EMA/RSI/MACD/ADX"),
+            ("AI Model",ai_layer_score,20,"XGBoost+LightGBM+RF"),
+            ("SMC+ICT",smc_layer_score+ict_layer_score,25,"OB/FVG/BOS/Liq"),
+            ("Volume",vol_layer_score,5,"Vol ratio"),
+            ("MTF",mtf_layer_score,10,"5m+15m+1H+4H"),
+            ("Pattern",pattern_layer_score,10,"H&S/DTop/Flag/C&H"),
+            ("Fibonacci",fib_layer_score,3,"Fib levels"),
+            ("Candle",candle_layer_score,2,"25+ patterns"),
+        ]:
+            _pc=int(_sc/max(_mx,1)*100); _cc="#00b880" if _pc>=65 else ("#f39c12" if _pc>=40 else "#e74c3c")
+            st.markdown(f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:5px;'><div style='min-width:95px;font-size:12px;color:#ccc;'>{_sl2}</div><div style='flex:1;background:#21262d;border-radius:99px;height:7px;'><div style='width:{_pc}%;background:{_cc};border-radius:99px;height:7px;'></div></div><div style='min-width:42px;font-size:11px;color:{_cc};text-align:right;'>{_sc}/{_mx}</div><div style='min-width:88px;font-size:10px;color:#555;'>{_ds}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"**Final Score: {total_score}/100** (Raw {raw_score} − Penalties {penalty_pts})")
 
     with st.expander("🔍 Full Layer Breakdown"):
         _dc1, _dc2 = st.columns(2)
@@ -3725,15 +3907,17 @@ Last Swing High: Rs.{bos_data.get("last_sh","—")} | Last Swing Low: Rs.{bos_da
             sig7 = mtf["signal"]
             cc7  = "#00b880" if "BUY" in sig7 else ("#e74c3c" if "SELL" in sig7 else "#f39c12")
 
-            st.markdown(f"""<div style='background:{cc7}22;border:2px solid {cc7};border-radius:12px;padding:16px;margin-bottom:14px;text-align:center;'>
-<div style='font-size:11px;color:#888;text-transform:uppercase;'>MTF Confluence</div>
-<div style='font-size:36px;font-weight:800;color:{cc7};'>{conf}%</div>
-<div style='font-size:14px;color:{cc7};font-weight:600;'>{sig7}</div>
-<div style='background:rgba(255,255,255,0.1);border-radius:99px;height:10px;margin:10px auto;max-width:250px;'>
-<div style='width:{conf}%;background:{cc7};border-radius:99px;height:10px;'></div></div>
-<div style='font-size:12px;color:#888;'>
-Bull TFs: {mtf.get("bull_count",0)} | Bear TFs: {mtf.get("bear_count",0)} | Total: {len(mtf.get("breakdown",{}))}
-</div></div>""", unsafe_allow_html=True)
+            _ap  = mtf.get("align_pct",conf); _maj = mtf.get("majority","BULLISH")
+            _alc = "#00b880" if _maj=="BULLISH" else "#e74c3c"
+            _mh  = f"<div style='background:{cc7}22;border:2px solid {cc7};border-radius:14px;padding:18px;margin-bottom:14px;'>"
+            _mh += f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;'>"
+            _mh += f"<div style='text-align:center;'><div style='font-size:10px;color:#888;text-transform:uppercase;'>MTF Confluence</div><div style='font-size:44px;font-weight:900;color:{cc7};line-height:1;'>{conf}%</div><div style='font-size:12px;color:{cc7};font-weight:600;'>{sig7}</div></div>"
+            _mh += f"<div style='text-align:center;'><div style='font-size:10px;color:#888;text-transform:uppercase;'>TF Alignment</div><div style='font-size:44px;font-weight:900;color:{_alc};line-height:1;'>{_ap}%</div><div style='font-size:12px;color:{_alc};font-weight:600;'>{_maj}</div></div>"
+            _mh += "</div>"
+            _mh += f"<div style='background:rgba(255,255,255,0.08);border-radius:99px;height:10px;margin-bottom:5px;'><div style='width:{conf}%;background:{cc7};border-radius:99px;height:10px;'></div></div>"
+            _mh += f"<div style='display:flex;justify-content:space-between;font-size:10px;color:#555;'><span>Bear: {mtf.get('bear_count',0)}</span><span>Bull: {mtf.get('bull_count',0)}</span></div>"
+            _mh += "</div>"
+            st.markdown(_mh, unsafe_allow_html=True)
 
             tf_cols = st.columns(len(mtf.get("breakdown",{})) or 4)
             for i,(tf,data) in enumerate(mtf.get("breakdown",{}).items()):
