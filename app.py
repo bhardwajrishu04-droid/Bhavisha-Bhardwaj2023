@@ -2634,115 +2634,66 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             next_html += f"<div style='font-size:11px;color:#888;padding:3px 0;'>→ {act}</div>"
         next_html += "</div>"
 
-    st.markdown(f"""
-<div style='background:{go_bg};border:3px solid {go_color};border-radius:20px;
-padding:0;margin:12px 0;overflow:hidden;'>
-
-  <div style='background:{go_color}22;padding:20px 24px;border-bottom:1px solid {go_color}44;'>
-    <div style='display:flex;justify-content:space-between;align-items:center;'>
-      <div>
-        <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;'>
-          TRADE DECISION — {stock.replace(".NS","")} | {selected_mode} | {now_ist().strftime("%H:%M IST")}
-        </div>
-        <div style='font-size:44px;font-weight:900;color:{go_color};line-height:1;letter-spacing:-.5px;'>
-          {go_emoji} {go_decision}
-        </div>
-        <div style='font-size:13px;color:#aaa;margin-top:6px;'>{go_reason}</div>
-      </div>
-      <div style='text-align:right;'>
-        <div style='font-size:64px;font-weight:900;color:{go_color};line-height:1;'>{total_score}</div>
-        <div style='font-size:11px;color:#888;'>/ 100 pts</div>
-        <div style='font-size:11px;color:#888;margin-top:4px;'>
-          Must: {must_pass}/{must_total} ✓ | Good: {good_pass}/{len(_good)}
-        </div>
-      </div>
-    </div>
-
-    <div style='background:rgba(255,255,255,0.08);border-radius:99px;height:16px;
-    margin:16px 0 6px;position:relative;overflow:hidden;'>
-      <div style='width:{total_score}%;background:linear-gradient(90deg,{go_color}77,{go_color});
-      border-radius:99px;height:16px;box-shadow:0 0 16px {go_color}55;'></div>
-      <div style='position:absolute;left:38%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>
-      <div style='position:absolute;left:52%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>
-      <div style='position:absolute;left:68%;top:0;width:2px;height:16px;background:#27ae60;opacity:0.5;'></div>
-      <div style='position:absolute;left:82%;top:0;width:2px;height:16px;background:#00b880;opacity:0.7;'></div>
-    </div>
-    <div style='display:flex;justify-content:space-between;font-size:9px;color:#444;'>
-      <span>0</span><span style='color:#e07b39;'>38 AVOID</span>
-      <span style='color:#f39c12;'>52 WAIT</span>
-      <span style='color:#27ae60;'>68 BUY ▲</span>
-      <span style='color:#00b880;'>82 STRONG ▲</span>
-      <span>100</span>
-    </div>
-  </div>
-
-  <div style='padding:18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:18px;'>
-
-    <div>
-      <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;'>
-        Must-Have Conditions ({must_pass}/{must_total})
-      </div>
-      {must_rows}
-      <div style='margin-top:12px;font-size:11px;color:#888;text-transform:uppercase;
-      letter-spacing:.06em;margin-bottom:6px;'>Bonus Conditions ({good_pass}/{len(_good)})</div>
-      {good_rows}
-      {next_html}
-    </div>
-
-    <div>
-        <div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>
-        Score Breakdown (10 Layers)
-      </div>
-      <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:14px;'>
-        {layer_rows}
-      </div>
-
-        <div style='background:rgba(0,0,0,0.4);border-radius:10px;padding:12px;margin-bottom:10px;'>
-        <div style='font-size:10px;color:#888;text-transform:uppercase;margin-bottom:8px;'>Trade Plan</div>
-        <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center;'>
-          <div><div style='font-size:9px;color:#888;'>Entry</div>
-          <div style='font-size:13px;font-weight:600;color:#e6edf3;'>Rs.{price:.2f}</div></div>
-          <div><div style='font-size:9px;color:#e74c3c;'>Stop Loss</div>
-          <div style='font-size:13px;font-weight:600;color:#e74c3c;'>Rs.{stop_loss_m}</div></div>
-          <div><div style='font-size:9px;color:#00b880;'>Target</div>
-          <div style='font-size:13px;font-weight:600;color:#00b880;'>Rs.{target_m}</div></div>
-          <div><div style='font-size:9px;color:#f39c12;'>R:R</div>
-          <div style='font-size:13px;font-weight:600;color:#f39c12;'>{_rr_m}:1</div></div>
-          <div><div style='font-size:9px;color:#a78bfa;'>Qty</div>
-          <div style='font-size:13px;font-weight:600;color:#a78bfa;'>{qty_m} sh</div></div>
-        </div>
-      </div>
-
-        <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;'>
-        <div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);
-        border-radius:8px;padding:8px;text-align:center;'>
-          <div style='font-size:9px;color:#888;'>Win Prob</div>
-          <div style='font-size:22px;font-weight:700;color:#00b880;'>{win_prob}%</div>
-        </div>
-        <div style='background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.25);
-        border-radius:8px;padding:8px;text-align:center;'>
-          <div style='font-size:9px;color:#888;'>Max Loss</div>
-          <div style='font-size:18px;font-weight:700;color:#e74c3c;'>Rs.{max_loss_rs:,.0f}</div>
-        </div>
-        <div style='background:rgba(0,184,128,0.1);border:1px solid rgba(0,184,128,0.25);
-        border-radius:8px;padding:8px;text-align:center;'>
-          <div style='font-size:9px;color:#888;'>Max Gain</div>
-          <div style='font-size:18px;font-weight:700;color:#00b880;'>Rs.{max_gain_rs:,.0f}</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div style='padding:0 24px 18px;'>
-    {penalty_rows}
-    <div style='margin-top:8px;font-size:10px;color:#444;text-align:center;'>
-      Raw Score:{raw_score} − Penalties:{penalty_pts} = Final:{total_score}/100
-      | Min 68 to BUY | Min 82 for STRONG BUY
-    </div>
-  </div>
-</div>""", unsafe_allow_html=True)
+    # Build HTML as Python string (avoids Streamlit markdown parser issues)
+    _h  = f"<div style='background:{go_bg};border:3px solid {go_color};"
+    _h += "border-radius:20px;padding:0;margin:12px 0;overflow:hidden;'>"
+    _h += f"<div style='background:{go_color}22;padding:20px 24px;border-bottom:1px solid {go_color}44;'>"
+    _h += f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+    _h += f"<div><div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;'>TRADE DECISION — {stock.replace('.NS','')} | {selected_mode} | {now_ist().strftime('%H:%M IST')}</div>"
+    _h += f"<div style='font-size:44px;font-weight:900;color:{go_color};line-height:1;letter-spacing:-.5px;'>{go_emoji} {go_decision}</div>"
+    _h += f"<div style='font-size:13px;color:#aaa;margin-top:6px;'>{go_reason}</div></div>"
+    _h += f"<div style='text-align:right;'><div style='font-size:64px;font-weight:900;color:{go_color};line-height:1;'>{total_score}</div>"
+    _h += f"<div style='font-size:11px;color:#888;'>/ 100 pts</div>"
+    _h += f"<div style='font-size:11px;color:#888;margin-top:4px;'>Must: {must_pass}/{must_total} ✓ | Good: {good_pass}/{len(_good)}</div>"
+    _h += "</div></div>"
+    # Score bar
+    _h += f"<div style='background:rgba(255,255,255,0.08);border-radius:99px;height:16px;margin:16px 0 6px;position:relative;overflow:hidden;'>"
+    _h += f"<div style='width:{total_score}%;background:linear-gradient(90deg,{go_color}77,{go_color});border-radius:99px;height:16px;box-shadow:0 0 16px {go_color}55;'></div>"
+    _h += "<div style='position:absolute;left:38%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>"
+    _h += "<div style='position:absolute;left:52%;top:0;width:2px;height:16px;background:#fff;opacity:0.15;'></div>"
+    _h += "<div style='position:absolute;left:68%;top:0;width:2px;height:16px;background:#27ae60;opacity:0.5;'></div>"
+    _h += "<div style='position:absolute;left:82%;top:0;width:2px;height:16px;background:#00b880;opacity:0.7;'></div></div>"
+    _h += "<div style='display:flex;justify-content:space-between;font-size:9px;color:#444;'>"
+    _h += "<span>0</span><span style='color:#e07b39;'>38 AVOID</span><span style='color:#f39c12;'>52 WAIT</span>"
+    _h += "<span style='color:#27ae60;'>68 BUY</span><span style='color:#00b880;'>82 STRONG</span><span>100</span></div>"
+    _h += "</div>"
+    # Main content grid - left (checklist) + right (scores + plan)
+    _h += "<div style='padding:18px 24px;display:grid;grid-template-columns:1fr 1fr;gap:18px;'>"
+    # Left: checklist
+    _h += f"<div><div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;'>Must-Have Conditions ({must_pass}/{must_total})</div>"
+    _h += must_rows
+    _h += f"<div style='margin-top:12px;font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;'>Bonus Conditions ({good_pass}/{len(_good)})</div>"
+    _h += good_rows
+    _h += next_html
+    _h += "</div>"
+    # Right: scores + plan
+    _h += "<div>"
+    _h += "<div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>Score Breakdown (10 Layers)</div>"
+    _h += f"<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:14px;'>{layer_rows}</div>"
+    # Trade plan
+    _h += "<div style='background:rgba(0,0,0,0.4);border-radius:10px;padding:12px;margin-bottom:10px;'>"
+    _h += "<div style='font-size:10px;color:#888;text-transform:uppercase;margin-bottom:8px;'>Trade Plan</div>"
+    _h += "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center;'>"
+    _h += f"<div><div style='font-size:9px;color:#888;'>Entry</div><div style='font-size:13px;font-weight:600;color:#e6edf3;'>Rs.{price:.2f}</div></div>"
+    _h += f"<div><div style='font-size:9px;color:#e74c3c;'>Stop Loss</div><div style='font-size:13px;font-weight:600;color:#e74c3c;'>Rs.{stop_loss_m}</div></div>"
+    _h += f"<div><div style='font-size:9px;color:#00b880;'>Target</div><div style='font-size:13px;font-weight:600;color:#00b880;'>Rs.{target_m}</div></div>"
+    _h += f"<div><div style='font-size:9px;color:#f39c12;'>R:R</div><div style='font-size:13px;font-weight:600;color:#f39c12;'>{_rr_m}:1</div></div>"
+    _h += f"<div><div style='font-size:9px;color:#a78bfa;'>Qty</div><div style='font-size:13px;font-weight:600;color:#a78bfa;'>{qty_m} sh</div></div>"
+    _h += "</div></div>"
+    # Win/Loss
+    _h += "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;'>"
+    _h += f"<div style='background:rgba(0,184,128,0.12);border:1px solid rgba(0,184,128,0.3);border-radius:8px;padding:8px;text-align:center;'><div style='font-size:9px;color:#888;'>Win Prob</div><div style='font-size:22px;font-weight:700;color:#00b880;'>{win_prob}%</div></div>"
+    _h += f"<div style='background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.25);border-radius:8px;padding:8px;text-align:center;'><div style='font-size:9px;color:#888;'>Max Loss</div><div style='font-size:18px;font-weight:700;color:#e74c3c;'>Rs.{max_loss_rs:,.0f}</div></div>"
+    _h += f"<div style='background:rgba(0,184,128,0.1);border:1px solid rgba(0,184,128,0.25);border-radius:8px;padding:8px;text-align:center;'><div style='font-size:9px;color:#888;'>Max Gain</div><div style='font-size:18px;font-weight:700;color:#00b880;'>Rs.{max_gain_rs:,.0f}</div></div>"
+    _h += "</div></div></div>"
+    # Penalties
+    _h += f"<div style='padding:0 24px 18px;'>{penalty_rows}"
+    _h += f"<div style='margin-top:8px;font-size:10px;color:#444;text-align:center;'>Raw:{raw_score} − Penalty:{penalty_pts} = Final:{total_score}/100 | Min 68 to BUY | Min 82 for STRONG BUY</div>"
+    _h += "</div></div>"
+    st.markdown(_h, unsafe_allow_html=True)
 
     if signal and ALERT_ON_SIGNAL:
+
         fire_alert(f"{verdict} [{selected_mode}]", stock, price,
                    qty_m, stop_loss_m, target_m, total_score, order_mode)
 
@@ -2794,7 +2745,7 @@ padding:0;margin:12px 0;overflow:hidden;'>
             st.markdown(
                 f"<div style='font-size:11px;color:{_tip_color};margin-bottom:8px;'>"
                 f"Data: {_dc} candles loaded | Features: {len(feat_cols)} | "
-                f"AI: {'Training' if _data_count>=40 else 'Need more data'} ({_data_count} samples)"
+                f"AI: {len(feat_cols)} features loaded"
                 f"{'  ✅ Good' if _dc>=80 else ('  ⚠️ Low — use Futures/Swing mode' if _dc>=20 else '  ❌ No data')}"
                 f"</div>",
                 unsafe_allow_html=True)
