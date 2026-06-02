@@ -2879,7 +2879,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     if signal and ALERT_ON_SIGNAL:
 
         fire_alert(f"{verdict} [{selected_mode}]", stock, price,
-                   qty_m, stop_loss_m, target_m, total_score, order_mode)
+                   qty_m, stop_loss_m, target_m, total_score, mode)
 
     # ── AI EXPLAINABILITY ─────────────────────────────────────
     try:
