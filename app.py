@@ -178,7 +178,55 @@ STOCK_UNIVERSE = {
         "SUNPHARMA.NS","DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","BIOCON.NS",
         "AUROPHARMA.NS","TORNTPHARM.NS","LUPIN.NS","IPCALAB.NS","ALKEM.NS"
     ],
+    "🇺🇸 US Funds (India NSE)": [
+        "MON100.NS",      # Motilal Oswal NASDAQ 100 ETF
+        "MAFANG.NS",      # Mirae Asset NYSE FANG+ ETF
+        "MONIFTY500.NS",  # Motilal Oswal S&P 500 ETF
+        "NIFTYBEES.NS",   # Nippon India Nifty 50 BeES
+        "HNGSNGBEES.NS",  # Hang Seng BeES
+        "MOM100.NS",      # Motilal Oswal NASDAQ 100
+        "IVZINGOLD.NS",   # Invesco Gold ETF
+        "NETFIT.NS",      # Mirae Asset NYSE FANG+
+    ],
+    "🇺🇸 US Stocks (Direct)": [
+        "AAPL",   # Apple
+        "MSFT",   # Microsoft
+        "GOOGL",  # Alphabet
+        "AMZN",   # Amazon
+        "META",   # Meta (Facebook)
+        "NVDA",   # NVIDIA
+        "TSLA",   # Tesla
+        "NFLX",   # Netflix
+        "BRKB",   # Berkshire Hathaway
+        "JPM",    # JP Morgan
+    ],
+    "📊 US ETFs & Index": [
+        "QQQ",   # NASDAQ 100 ETF (Invesco)
+        "SPY",   # S&P 500 ETF
+        "VTI",   # Total US Market
+        "ARKK",  # ARK Innovation ETF
+        "IWM",   # Russell 2000 (Small Cap)
+        "GLD",   # Gold ETF
+        "SLV",   # Silver ETF
+        "USO",   # Oil ETF
+    ],
 }
+
+# Currency mapping for non-INR stocks
+STOCKS = STOCK_UNIVERSE  # alias for compatibility
+USD_STOCKS = [
+    "AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","NFLX","BRKB","JPM",
+    "QQQ","SPY","VTI","ARKK","IWM","GLD","SLV","USO"
+]
+
+def get_currency(symbol: str) -> str:
+    """Return currency symbol for a stock."""
+    return "$" if symbol in USD_STOCKS else "₹"
+
+def format_price(price: float, symbol: str) -> str:
+    """Format price with correct currency."""
+    curr = get_currency(symbol)
+    return f"{curr}{price:,.2f}"
 
 FO_LOTS = {
     "RELIANCE.NS":250,"TCS.NS":150,"HDFCBANK.NS":550,"ICICIBANK.NS":700,
@@ -3015,7 +3063,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 _ppct = (_cp-_pos["price"])/_pos["price"]*100
                 _val  = _cp*_pos["qty"]
                 _sec  = "Other"
-                for _sn,_ss in STOCKS.items():
+                for _sn,_ss in STOCK_UNIVERSE.items():
                     if _pos["stock"] in _ss: _sec=_sn.replace("⭐ ","").replace("🏦 ","").replace("💻 ","").replace("🚗 ","").replace("🛒 ","").replace("💊 ",""); break
                 _sec_exp[_sec] = _sec_exp.get(_sec,0)+_val
                 _pos_data.append({"Stock":_sym,"Entry":f"₹{_pos['price']:.2f}","LTP":f"₹{_cp:.2f}","Qty":_pos["qty"],"P&L":f"₹{_pnl:+.0f}","P&L%":f"{_ppct:+.1f}%","Sector":_sec})
@@ -3057,7 +3105,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 
                 # Find sector
                 sector = "Other"
-                for sec_name, sec_stocks in STOCKS.items():
+                for sec_name, sec_stocks in STOCK_UNIVERSE.items():
                     if pos["stock"] in sec_stocks:
                         sector = sec_name.split(" ")[-1]
                         break
@@ -4297,7 +4345,7 @@ border-left:3px solid {color};border-radius:5px;padding:8px 12px;margin-bottom:5
         st.markdown("---")
         st.markdown("#### Correlation Filter")
         try:
-            all_stocks = [s for lst in list(STOCKS.values())[:2] for s in lst]
+            all_stocks = [s for lst in list(STOCK_UNIVERSE.values())[:2] for s in lst]
             with st.spinner("Checking correlations..."):
                 corr_data = get_correlation_filter(stock, tuple(all_stocks[:8]))
             if corr_data.get("status") == "ok":
