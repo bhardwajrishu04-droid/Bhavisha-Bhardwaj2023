@@ -3209,17 +3209,63 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         _dc1, _dc2 = st.columns(2)
         with _dc1:
             st.markdown("**Technical Checks:**")
+            _pass = sum(1 for v in tech_checks.values() if v)
+            _total_tc = len(tech_checks)
+            tc_color = "#00b880" if _pass>=7 else ("#f39c12" if _pass>=5 else "#e74c3c")
+            st.markdown(f"<div style='font-size:11px;color:{tc_color};margin-bottom:8px;font-weight:600;'>{_pass}/{_total_tc} checks passed</div>", unsafe_allow_html=True)
             for k,v in tech_checks.items():
-                st.markdown(f"{'✅' if v else '❌'} {k}")
+                c2 = "#00b880" if v else "#e74c3c"
+                st.markdown(f"<div style='padding:3px 0;font-size:13px;color:{c2};'>{'✅' if v else '❌'} {k}</div>", unsafe_allow_html=True)
+
         with _dc2:
-            st.markdown(f"**AI: {ai_model_name}**")
-            if wf_results:
-                avg_wf=round(sum(wf_results)/len(wf_results),1)
-                st.caption(f"Walk-forward: {wf_results} | Avg:{avg_wf}%")
+            st.markdown("**AI Model Status:**")
+            # Model name + status
+            _ai_is_default = "Default" in ai_model_name or ai_model_name == ""
+            if _ai_is_default:
+                st.markdown("<div style='background:#1a1200;border:1px solid #f39c12;border-radius:8px;padding:10px;margin-bottom:8px;'><div style='color:#f39c12;font-size:12px;font-weight:600;'>AI Model: Insufficient Data</div><div style='color:#888;font-size:11px;margin-top:4px;'>Need 40+ candles — Switch to Futures/Swing mode for full AI</div></div>", unsafe_allow_html=True)
+            else:
+                _model_c = "#00b880" if ai_accuracy>=60 else ("#f39c12" if ai_accuracy>=50 else "#e74c3c")
+                _ai_h  = f"<div style='background:{_model_c}22;border:1px solid {_model_c};border-radius:8px;padding:10px;margin-bottom:8px;'>"
+                _ai_h += f"<div style='color:{_model_c};font-size:12px;font-weight:600;'>{ai_confidence} Confidence — {ai_accuracy}% accuracy</div>"
+                _ai_h += f"<div style='color:#888;font-size:10px;margin-top:3px;'>{ai_model_name[:55]}</div></div>"
+                st.markdown(_ai_h, unsafe_allow_html=True)
+
+            # AI probability gauge
+            _ai_c = "#00b880" if ai_pct>=60 else ("#f39c12" if ai_pct>=40 else "#e74c3c")
+            st.markdown(f"<div style='display:flex;justify-content:space-between;margin-bottom:3px;'><span style='font-size:11px;color:#888;'>AI Bullish Probability</span><span style='font-size:13px;font-weight:700;color:{_ai_c};'>{ai_pct}%</span></div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#21262d;border-radius:99px;height:8px;margin-bottom:12px;'><div style='width:{ai_pct}%;background:{_ai_c};border-radius:99px;height:8px;'></div></div>", unsafe_allow_html=True)
+
+            # Walk-forward results
+            if wf_results and len(wf_results)>0:
+                avg_wf = round(sum(wf_results)/len(wf_results),1)
+                std_wf = round((sum((x-avg_wf)**2 for x in wf_results)/len(wf_results))**0.5,1)
+                st.markdown(f"<div style='font-size:11px;color:#888;margin-bottom:6px;'>Walk-Forward ({len(wf_results)} folds) | Avg: {avg_wf}% | Std: ±{std_wf}%</div>", unsafe_allow_html=True)
+                _wf_h = "<div style='display:flex;gap:4px;margin-bottom:10px;'>"
+                for _wfv in wf_results:
+                    _wc = "#00b880" if _wfv>=60 else ("#f39c12" if _wfv>=50 else "#e74c3c")
+                    _wf_h += f"<div style='flex:1;background:{_wc}22;border:1px solid {_wc};border-radius:5px;padding:5px;text-align:center;font-size:11px;font-weight:700;color:{_wc};'>{_wfv}%</div>"
+                _wf_h += "</div>"
+                st.markdown(_wf_h, unsafe_allow_html=True)
+            else:
+                st.caption("Walk-forward: Not available (need more data)")
+
+            # Feature importance bars
             if feature_importance:
-                st.markdown("**Top Features:**")
-                for fn,fi in list(feature_importance.items())[:5]:
-                    st.markdown(f"`{fn}` {fi:.3f}")
+                st.markdown("<div style='font-size:11px;color:#888;margin-bottom:6px;'>Top Feature Importance:</div>", unsafe_allow_html=True)
+                _max_fi = max(feature_importance.values())+1e-9
+                for fn,fi in list(feature_importance.items())[:6]:
+                    _bw = int(fi/_max_fi*100)
+                    _fc = "#4e8fff" if _bw>60 else ("#00b880" if _bw>40 else "#888")
+                    st.markdown(f"<div style='display:flex;align-items:center;gap:6px;margin-bottom:3px;'><div style='min-width:70px;font-size:10px;color:#ccc;'>{fn[:10]}</div><div style='flex:1;background:#21262d;border-radius:3px;height:6px;'><div style='width:{_bw}%;background:{_fc};border-radius:3px;height:6px;'></div></div><div style='min-width:35px;font-size:10px;color:#888;text-align:right;'>{fi:.3f}</div></div>", unsafe_allow_html=True)
+            else:
+                st.caption("Feature importance: Not available")
+
+            # LSTM if available
+            if hasattr(st.session_state, 'lstm_forecast') and st.session_state.get('lstm_forecast'):
+                _lf = st.session_state.lstm_forecast
+                _lt = "UP" if _lf[-1]>price else "DOWN"
+                _lc = "#00b880" if _lt=="UP" else "#e74c3c"
+                st.markdown(f"<div style='background:{_lc}22;border:1px solid {_lc};border-radius:6px;padding:8px;margin-top:8px;font-size:11px;'><b style='color:{_lc};'>LSTM: {_lt}</b> — {' → '.join([f'₹{p:.0f}' for p in _lf[:3]])}</div>", unsafe_allow_html=True)
 
 
         # ── Variables needed for detail section ─────────────────
