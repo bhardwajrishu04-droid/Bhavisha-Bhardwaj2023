@@ -2864,7 +2864,167 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     st.markdown(_eh, unsafe_allow_html=True)
 
     # ── PORTFOLIO HEATMAP + SECTOR EXPOSURE ─────────────────
-    with st.expander("📊 Portfolio Dashboard — Heat Map & Sector Exposure"):
+    st.markdown("---")
+
+    # ============================================================
+    # PANEL 1: CAPITAL ADVISOR
+    # ============================================================
+    with st.expander("💰 Capital Advisor — Position Sizing Calculator", expanded=True):
+        cap_c1, cap_c2, cap_c3 = st.columns(3)
+        adv_capital = cap_c1.number_input("Your Capital (₹)", 10000, 10000000, int(capital), 5000, key="adv_cap")
+        adv_risk_pct= cap_c2.number_input("Risk per trade %", 0.5, 5.0, float(risk), 0.5, key="adv_risk")
+        adv_rr      = cap_c3.number_input("Target R:R", 1.0, 10.0, 2.0, 0.5, key="adv_rr")
+
+        adv_risk_rs  = round(adv_capital * adv_risk_pct / 100, 2)
+        adv_sl_dist  = atr_now * mcfg.get("sl_mult", 1.5)
+        adv_qty      = max(1, int(adv_risk_rs / adv_sl_dist)) if adv_sl_dist > 0 else 1
+        adv_max_loss = round(adv_sl_dist * adv_qty, 2)
+        adv_tgt_dist = adv_sl_dist * adv_rr
+        adv_max_gain = round(adv_tgt_dist * adv_qty, 2)
+        adv_sl_px    = round(price - adv_sl_dist, 2)
+        adv_tgt_px   = round(price + adv_tgt_dist, 2)
+
+        # Capital Advisor Card
+        adv_col = "#00b880" if is_trade else "#f39c12"
+        adv_h  = f"<div style='background:#0d1117;border:2px solid {adv_col};border-radius:14px;padding:20px;margin:8px 0;'>"
+        adv_h += f"<div style='font-size:13px;font-weight:700;color:#e6edf3;margin-bottom:16px;'>Capital Advisor — {stock.replace('.NS','')} {selected_mode}</div>"
+        adv_h += f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;'>"
+        for lbl2,val2,vc2 in [
+            ("Capital", f"₹{adv_capital:,.0f}", "#e6edf3"),
+            ("Risk Amount", f"₹{adv_risk_rs:,.0f}", "#f39c12"),
+            ("Qty to Buy", str(adv_qty)+" shares", adv_col),
+            ("SL Distance", f"₹{adv_sl_dist:.2f}", "#e74c3c"),
+        ]:
+            adv_h += f"<div style='background:#161b22;border-radius:8px;padding:12px;text-align:center;border:1px solid #21262d;'><div style='font-size:10px;color:#888;margin-bottom:4px;'>{lbl2}</div><div style='font-size:18px;font-weight:700;color:{vc2};'>{val2}</div></div>"
+        adv_h += "</div>"
+        adv_h += f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;'>"
+        for lbl2,val2,vc2 in [
+            ("Entry", f"₹{price:.2f}", "#e6edf3"),
+            ("Stop Loss", f"₹{adv_sl_px}", "#e74c3c"),
+            ("Target", f"₹{adv_tgt_px}", "#00b880"),
+            ("R:R Ratio", f"{adv_rr:.1f}:1", "#a78bfa"),
+        ]:
+            adv_h += f"<div style='background:#161b22;border-radius:8px;padding:12px;text-align:center;border:1px solid #21262d;'><div style='font-size:10px;color:#888;margin-bottom:4px;'>{lbl2}</div><div style='font-size:18px;font-weight:700;color:{vc2};'>{val2}</div></div>"
+        adv_h += "</div>"
+        adv_h += f"<div style='margin-top:14px;background:#161b22;border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;'>"
+        adv_h += f"<div><span style='color:#888;font-size:12px;'>Max Loss: </span><span style='color:#e74c3c;font-size:16px;font-weight:700;'>₹{adv_max_loss:,.0f}</span></div>"
+        adv_h += f"<div><span style='color:#888;font-size:12px;'>Risk %: </span><span style='color:#f39c12;font-size:16px;font-weight:700;'>{adv_risk_pct}%</span></div>"
+        adv_h += f"<div><span style='color:#888;font-size:12px;'>Max Gain: </span><span style='color:#00b880;font-size:16px;font-weight:700;'>₹{adv_max_gain:,.0f}</span></div>"
+        adv_h += f"<div><span style='color:#888;font-size:12px;'>Win Prob: </span><span style='color:#a78bfa;font-size:16px;font-weight:700;'>{win_prob}%</span></div>"
+        adv_h += "</div></div>"
+        st.markdown(adv_h, unsafe_allow_html=True)
+
+        # Rule of thumb advice
+        if adv_risk_pct > 2:
+            st.warning(f"Risk {adv_risk_pct}% per trade — bahut zyada! Max 1.5% recommended.")
+        elif adv_rr < 1.5:
+            st.warning("R:R below 1.5:1 — profitable trading mushkil hoga.")
+        else:
+            st.success(f"Risk management theek hai — ₹{adv_risk_rs:,.0f} risk, ₹{adv_max_gain:,.0f} potential gain.")
+
+    # ============================================================
+    # PANEL 2: PORTFOLIO RISK ENGINE
+    # ============================================================
+    with st.expander("🛡️ Portfolio Risk Engine", expanded=True):
+        positions     = st.session_state.get("paper_positions", {})
+        balance       = st.session_state.paper_balance
+        total_exposed = sum(p.get("qty",0)*p.get("price",0) for p in positions.values())
+        total_port    = balance + total_exposed
+        exposure_pct  = total_exposed / (total_port+0.01) * 100
+        n_pos         = len(positions)
+
+        # Overall risk gauge
+        risk_color = "#00b880" if exposure_pct<40 else ("#f39c12" if exposure_pct<70 else "#e74c3c")
+        risk_label = "LOW" if exposure_pct<40 else ("MEDIUM" if exposure_pct<70 else "HIGH")
+
+        rpe_h  = f"<div style='background:#0d1117;border:2px solid {risk_color};border-radius:14px;padding:20px;'>"
+        rpe_h += f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;'>"
+        rpe_h += f"<div style='text-align:center;background:#161b22;border-radius:10px;padding:16px;'>"
+        rpe_h += f"<div style='font-size:11px;color:#888;text-transform:uppercase;'>Portfolio Exposure</div>"
+        rpe_h += f"<div style='font-size:48px;font-weight:900;color:{risk_color};line-height:1;'>{exposure_pct:.0f}%</div>"
+        rpe_h += f"<div style='font-size:14px;color:{risk_color};font-weight:600;'>{risk_label} RISK</div></div>"
+        rpe_h += f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>"
+        for lbl3,val3,vc3 in [
+            ("Balance",    f"₹{balance:,.0f}",       "#00b880"),
+            ("Invested",   f"₹{total_exposed:,.0f}", "#4e8fff"),
+            ("Positions",  f"{n_pos}/5 max",          "#f39c12"),
+            ("Portfolio",  f"₹{total_port:,.0f}",    "#e6edf3"),
+        ]:
+            rpe_h += f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px;text-align:center;'><div style='font-size:9px;color:#888;'>{lbl3}</div><div style='font-size:14px;font-weight:600;color:{vc3};'>{val3}</div></div>"
+        rpe_h += "</div></div>"
+        # Risk bar
+        rpe_h += f"<div style='background:rgba(255,255,255,0.06);border-radius:99px;height:14px;margin-bottom:6px;position:relative;overflow:hidden;'>"
+        rpe_h += f"<div style='width:{min(exposure_pct,100):.0f}%;background:linear-gradient(90deg,#00b880,{risk_color});border-radius:99px;height:14px;'></div>"
+        rpe_h += "<div style='position:absolute;left:40%;top:0;width:2px;height:14px;background:#fff;opacity:0.2;'></div>"
+        rpe_h += "<div style='position:absolute;left:70%;top:0;width:2px;height:14px;background:#fff;opacity:0.3;'></div></div>"
+        rpe_h += "<div style='display:flex;justify-content:space-between;font-size:9px;color:#444;margin-bottom:14px;'>"
+        rpe_h += "<span>0% Safe</span><span style='color:#f39c12;'>40% Medium</span><span style='color:#e74c3c;'>70% High</span><span>100%</span></div>"
+        # Positions heatmap
+        if positions:
+            rpe_h += "<div style='font-size:11px;color:#888;font-weight:600;margin-bottom:8px;'>POSITION HEAT MAP</div>"
+            rpe_h += "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:6px;'>"
+            for sym3,pos3 in positions.items():
+                pnl3  = (price - pos3["price"]) * pos3["qty"] if stock.replace(".NS","")==sym3 else 0
+                pc3   = "#00b880" if pnl3>=0 else "#e74c3c"
+                rpe_h += f"<div style='background:{pc3}22;border:2px solid {pc3};border-radius:8px;padding:8px;text-align:center;'><div style='font-size:12px;font-weight:700;color:{pc3};'>{sym3[:8]}</div><div style='font-size:11px;color:{pc3};'>₹{pnl3:+.0f}</div></div>"
+            rpe_h += "</div>"
+        else:
+            rpe_h += "<div style='font-size:12px;color:#555;text-align:center;padding:16px;'>No open positions — Portfolio empty</div>"
+        # Risk rules
+        rpe_h += "<div style='margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;'>"
+        rules = [
+            ("Max per trade", "2% capital", n_pos<5),
+            ("Max positions", f"{n_pos}/5", n_pos<5),
+            ("Max exposure", f"{exposure_pct:.0f}%/80%", exposure_pct<80),
+        ]
+        for rl,rv,rok in rules:
+            rc = "#00b880" if rok else "#e74c3c"
+            rpe_h += f"<div style='background:#161b22;border:1px solid {rc}55;border-radius:6px;padding:8px;text-align:center;'>"
+            rpe_h += f"<div style='font-size:9px;color:#888;'>{rl}</div><div style='font-size:12px;color:{rc};font-weight:600;'>{rv}</div>"
+            rpe_h += f"<div style='font-size:10px;color:{rc};'>{"OK" if rok else "WARN"}</div></div>"
+        rpe_h += "</div></div>"
+        st.markdown(rpe_h, unsafe_allow_html=True)
+
+        if n_pos >= 5: st.error("Max 5 positions reached — close some before new trade!")
+        elif exposure_pct > 70: st.warning(f"High exposure {exposure_pct:.0f}% — reduce position size!")
+        elif not is_trade: st.info("Portfolio risk OK — Ready to trade when signal confirms.")
+        else: st.success("Portfolio risk OK — Go ahead with the trade!")
+
+    # ============================================================
+    # PANEL 3: PORTFOLIO HEAT MAP + SECTOR EXPOSURE
+    # ============================================================
+    with st.expander("📊 Portfolio Heat Map & Sector Exposure"):
+        if st.session_state.get("paper_positions"):
+            _pos_all  = st.session_state.paper_positions
+            _pos_data = []
+            _sec_exp  = {}
+            for _sym,_pos in _pos_all.items():
+                try:
+                    import yfinance as _yf3
+                    _cp = float(_yf3.Ticker(_pos["stock"]).history(period="1d",interval="1m")["Close"].iloc[-1])
+                except Exception: _cp = _pos["price"]
+                _pnl  = (_cp-_pos["price"])*_pos["qty"]
+                _ppct = (_cp-_pos["price"])/_pos["price"]*100
+                _val  = _cp*_pos["qty"]
+                _sec  = "Other"
+                for _sn,_ss in STOCKS.items():
+                    if _pos["stock"] in _ss: _sec=_sn.replace("⭐ ","").replace("🏦 ","").replace("💻 ","").replace("🚗 ","").replace("🛒 ","").replace("💊 ",""); break
+                _sec_exp[_sec] = _sec_exp.get(_sec,0)+_val
+                _pos_data.append({"Stock":_sym,"Entry":f"₹{_pos['price']:.2f}","LTP":f"₹{_cp:.2f}","Qty":_pos["qty"],"P&L":f"₹{_pnl:+.0f}","P&L%":f"{_ppct:+.1f}%","Sector":_sec})
+            st.dataframe(_pos_data, hide_index=True, use_container_width=True)
+            # Sector exposure
+            if _sec_exp:
+                st.markdown("**Sector Exposure:**")
+                _stv = sum(_sec_exp.values())+0.01
+                _sc2 = st.columns(min(6,len(_sec_exp)))
+                for _si,(_sn2,_sv2) in enumerate(_sec_exp.items()):
+                    if _si<len(_sc2):
+                        _sp=_sv2/_stv*100
+                        _sc2[_si].markdown(f"<div style='background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px;text-align:center;'><div style='font-size:10px;color:#888;'>{_sn2[:10]}</div><div style='font-size:18px;font-weight:700;color:#4e8fff;'>{_sp:.0f}%</div><div style='font-size:10px;color:#555;'>₹{_sv2:,.0f}</div></div>", unsafe_allow_html=True)
+        else:
+            st.info("No open positions. Paper trade karo first!")
+
+    with st.expander("🎓 Hindi AI Coach — Trading Seekho"):
         if st.session_state.get("paper_positions"):
             positions = st.session_state.paper_positions
             total_cap = st.session_state.paper_balance
