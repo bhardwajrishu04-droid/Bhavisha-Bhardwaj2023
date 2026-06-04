@@ -3538,7 +3538,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 st.success(f"📄 Paper BUY | {sym} | ₹{live_px:.2f}×{qty} | SL ₹{stop_loss} | TGT ₹{target_price}")
                 save_user_data(user)  # persist to file
                 if ALERT_ON_EXECUTION:
-                    fire_alert(f"BUY EXECUTED [{selected_mode}]",stock,live_px,qty,stop_loss,target_price,score,"Paper")
+                    fire_alert(f"BUY EXECUTED [{selected_mode}]",stock,live_px,qty,stop_loss,target_price,total_score,"Paper")
                 return
             if txn == "SELL":
                 if not st.session_state.paper_position:
@@ -3556,7 +3556,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 save_user_data(user)  # persist to file
                 if ALERT_ON_EXECUTION:
                     fire_alert(f"SELL EXECUTED [{selected_mode}]",stock,live_px,pos["qty"],
-                               pos["stop_loss"],pos["target"],score,"Paper",pnl=pnl)
+                               pos["stop_loss"],pos["target"],total_score,"Paper",pnl=pnl)
                 return
         if not kite_ok(): st.error("❌ Kite Not Connected"); return
         try:
@@ -3568,7 +3568,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             st.success(f"✅ Live {txn} | {sym}×{fo_qty} | {mcfg['product']}")
             save_user_data(user)  # persist to file
             if ALERT_ON_EXECUTION:
-                fire_alert(f"{txn} LIVE [{selected_mode}]",stock,price,fo_qty,stop_loss,target_price,score,"Live")
+                fire_alert(f"{txn} LIVE [{selected_mode}]",stock,price,fo_qty,stop_loss,target_price,total_score,"Live")
         except Exception as e:
             st.error(e)
 
