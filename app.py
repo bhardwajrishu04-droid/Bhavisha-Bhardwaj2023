@@ -2659,7 +2659,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     _tg_d      = _sl_d*mcfg.get("rr",2.0)
     stop_loss_m= round(price-_sl_d,2)
     target_m   = round(price+_tg_d,2)
-    qty_m      = max(1,int(capital*(risk/100)/_sl_d))
+    qty_m      = min(max(1,int(capital*(risk/100)/_sl_d)), max(1,int(capital*0.20/max(price,1))))
     max_loss_rs= round(_sl_d*qty_m,2)
     max_gain_rs= round(_tg_d*qty_m,2)
     win_prob   = min(82,round(total_score*0.65+20))
@@ -3582,15 +3582,32 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
 
     if mode == "Paper" and st.session_state.paper_position:
         pos = st.session_state.paper_position
-        open_pnl = (price-pos["price"])*pos["qty"]
-        color = "#2d8a4e" if open_pnl>=0 else "#c0392b"
-        st.markdown(f"""<div style="background:#f0fff4;border:1px solid #2d8a4e;border-radius:6px;
-padding:10px 16px;margin:8px 0;">
-<b>📦 Open [{pos.get('strategy','—')}]</b><br>
-{pos['stock'].replace('.NS','')} | Entry ₹{pos['price']:.2f} | Qty {pos['qty']}
-| SL ₹{pos['stop_loss']} | TGT ₹{pos['target']}<br>
-Unrealised: <b style="color:{color}">₹{open_pnl:+.2f}</b>
-</div>""", unsafe_allow_html=True)
+        try:
+            _pos_hist = yf.Ticker(pos["stock"]).history(period="1d", interval="1m")
+            _live_px  = float(_pos_hist["Close"].iloc[-1]) if not _pos_hist.empty else pos["price"]
+        except Exception:
+            _live_px  = pos["price"]
+        open_pnl = (_live_px - pos["price"]) * pos["qty"]
+        _color   = "#2d8a4e" if open_pnl >= 0 else "#c0392b"
+        _sl_hit  = _live_px <= float(pos["stop_loss"])
+        _tgt_hit = _live_px >= float(pos["target"])
+        _status  = " ⚡ SL Hit!" if _sl_hit else (" 🎯 Target Hit!" if _tgt_hit else "")
+        _bdr     = "#e74c3c" if _sl_hit else ("#00b880" if _tgt_hit else "#2d8a4e")
+        _bg      = "#fff0f0" if _sl_hit else ("#f0fff8" if _tgt_hit else "#f0fff4")
+        st.markdown(
+            f"<div style='background:{_bg};border:2px solid {_bdr};border-radius:10px;"
+            f"padding:12px 16px;margin:8px 0;'>"
+            f"<div style='font-size:13px;font-weight:700;'>"
+            f"Open [{pos.get('strategy','Intraday')}]{_status}</div>"
+            f"<div style='margin:5px 0;font-size:13px;'>"
+            f"{pos['stock'].replace('.NS','')} | Entry Rs.{pos['price']:.2f} "
+            f"| LTP Rs.{_live_px:.2f} | Qty {pos['qty']}</div>"
+            f"<div style='font-size:12px;color:#666;'>"
+            f"SL Rs.{pos['stop_loss']} | TGT Rs.{pos['target']}</div>"
+            f"<div style='font-size:16px;font-weight:700;color:{_color};margin-top:5px;'>"
+            f"Unrealised: Rs.{open_pnl:+.2f}</div>"
+            f"</div>",
+            unsafe_allow_html=True)
 
     if auto_trade:
         if mode == "Live" and kite_ok() and signal and can_trade():
