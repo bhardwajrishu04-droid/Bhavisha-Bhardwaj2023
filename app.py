@@ -214,6 +214,59 @@ STOCK_UNIVERSE = {
 
 # Currency mapping for non-INR stocks
 STOCKS = STOCK_UNIVERSE  # alias for compatibility
+
+# =============================================================
+# CURRENCY (FOREX) UNIVERSE — NSE Currency Derivatives Segment
+# =============================================================
+# Only INR-based pairs are legal for Indian residents to trade on
+# margin (FEMA/RBI rules) — traded via Kite Connect exchange="CDS",
+# same account, same order flow as equities. Spot data for charting
+# and signal generation comes from free yfinance forex tickers.
+CURRENCY_UNIVERSE = {
+    "💱 NSE Currency Pairs (INR)": [
+        "USDINR=X", "EURINR=X", "GBPINR=X", "JPYINR=X",
+    ],
+}
+# yfinance ticker -> (CDS base symbol used in Kite tradingsymbol, lot size)
+CDS_META = {
+    "USDINR=X": {"base": "USDINR", "lot_size": 1000},
+    "EURINR=X": {"base": "EURINR", "lot_size": 1000},
+    "GBPINR=X": {"base": "GBPINR", "lot_size": 1000},
+    "JPYINR=X": {"base": "JPYINR", "lot_size": 100000},
+}
+
+def is_currency_symbol(sym):
+    return sym in CDS_META
+
+def get_cds_tradingsymbol(kite_obj, yf_sym):
+    """Resolve the nearest-expiry NSE CDS futures tradingsymbol for a
+    currency pair (e.g. 'USDINR=X' -> 'USDINR26JULFUT'). Caches the
+    CDS instrument dump in session_state for the day to avoid repeated
+    heavy API calls."""
+    meta = CDS_META.get(yf_sym)
+    if not meta:
+        return None, 0
+    base = meta["base"]
+    cache_key = "_cds_instruments_cache"
+    cache_date_key = "_cds_instruments_date"
+    today = now_ist().strftime("%Y-%m-%d")
+    if (cache_key not in st.session_state or
+            st.session_state.get(cache_date_key) != today):
+        try:
+            st.session_state[cache_key] = kite_obj.instruments("CDS")
+            st.session_state[cache_date_key] = today
+        except Exception:
+            st.session_state[cache_key] = []
+    instruments = st.session_state.get(cache_key, [])
+    candidates = [
+        i for i in instruments
+        if i.get("name") == base and i.get("instrument_type") == "FUT"
+    ]
+    if not candidates:
+        return None, meta["lot_size"]
+    candidates.sort(key=lambda i: i["expiry"])
+    nearest = candidates[0]
+    return nearest["tradingsymbol"], meta["lot_size"]
 USD_STOCKS = [
     "AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","NFLX","BRKB","JPM",
     "QQQ","SPY","VTI","ARKK","IWM","GLD","SLV","USO"
@@ -2051,14 +2104,14 @@ def get_correlation_filter(_stock: str, universe: tuple) -> dict:
             try:
                 d = yf2.Ticker(s).history(period="1mo", interval="1d")
                 if not d.empty and len(d) >= 15:
-                    prices[s.replace(".NS","")] = d["Close"].pct_change().dropna().values[-15:]
+                    prices[s.replace(".NS","").replace("=X","")] = d["Close"].pct_change().dropna().values[-15:]
             except Exception:
                 continue
         if len(prices) < 2:
             return {"status": "insufficient_data", "correlations": {}}
 
         import numpy as np
-        stock_sym = _stock.replace(".NS","")
+        stock_sym = _stock.replace(".NS","").replace("=X","")
         if stock_sym not in prices:
             return {"status": "no_data", "correlations": {}}
 
@@ -2263,11 +2316,21 @@ with col_main:
         c4.metric("📊 Closed Trades", n)
         st.markdown("---")
 
-    st.markdown("#### 📋 Stock Universe")
-    universe_name = st.selectbox("Select Universe", list(STOCK_UNIVERSE.keys()))
-    stocks = STOCK_UNIVERSE[universe_name]
+    st.markdown("#### 📋 Asset Class")
+    asset_class = st.radio("Trade", ["📈 Equity / F&O", "💱 Currency (NSE-CDS)"],
+                            horizontal=True, key="asset_class_sel")
+    active_universe = CURRENCY_UNIVERSE if asset_class.startswith("💱") else STOCK_UNIVERSE
+    is_currency_mode = asset_class.startswith("💱")
 
-    st.markdown(f"#### 🔍 Scanner — {universe_name} ({len(stocks)} stocks)")
+    if is_currency_mode:
+        st.caption("ℹ️ Only INR pairs (USDINR / EURINR / GBPINR / JPYINR) — FEMA/RBI compliant, "
+                   "traded via Kite Connect's CDS segment, same account as your equities.")
+
+    st.markdown("#### 📋 Stock Universe" if not is_currency_mode else "#### 📋 Currency Universe")
+    universe_name = st.selectbox("Select Universe", list(active_universe.keys()))
+    stocks = active_universe[universe_name]
+
+    st.markdown(f"#### 🔍 Scanner — {universe_name} ({len(stocks)} {'pairs' if is_currency_mode else 'stocks'})")
     scan_btn = st.button(f"🔍 Scan All {len(stocks)} Stocks", type="primary")
 
     universe_key = f"scanned_{universe_name}_{selected_mode}"
@@ -2295,7 +2358,7 @@ with col_main:
                     sc = max(0, min(sc, 5))
                     chg = (last["Close"] - d["Close"].iloc[-2]) / d["Close"].iloc[-2] * 100
                     scan.append({
-                        "Stock":  s.replace(".NS",""),
+                        "Stock":  s.replace(".NS","").replace("=X",""),
                         "Price":  round(float(last["Close"]),2),
                         "Chg%":   round(chg,2),
                         "RSI":    round(float(last["RSI"]),1),
@@ -2351,7 +2414,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         best_idx = 0
 
     stock = st.selectbox("📌 Select Stock to Trade", stocks,
-                         index=best_idx, format_func=lambda x: x.replace(".NS", ""))
+                         index=best_idx, format_func=lambda x: x.replace(".NS", "").replace("=X", ""))
 
     # ── DATA LOADING WITH EXTENDED FALLBACK ───────────────────
     def load_data(sym, period, interval):
@@ -2378,11 +2441,11 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 continue
         return None
 
-    with st.spinner(f"Loading {stock.replace('.NS','')}..."):
+    with st.spinner(f"Loading {stock.replace('.NS','').replace('=X','')}..."):
         df = load_data(stock, mcfg["period"], mcfg["interval"])
 
     if df is None or df.empty or len(df) < 5:
-        st.error(f"⚠️ No data for {stock.replace('.NS','')} — try Swing mode")
+        st.error(f"⚠️ No data for {stock.replace('.NS','').replace('=X','')} — try Swing mode")
         st.info("💡 Switch to **🌊 Swing** mode — uses daily data, always available")
         st.stop()
 
@@ -2823,7 +2886,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     _h += "border-radius:20px;padding:0;margin:12px 0;overflow:hidden;'>"
     _h += f"<div style='background:{go_color}22;padding:20px 24px;border-bottom:1px solid {go_color}44;'>"
     _h += f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-    _h += f"<div><div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;'>TRADE DECISION — {stock.replace('.NS','')} | {selected_mode} | {now_ist().strftime('%H:%M IST')}</div>"
+    _h += f"<div><div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;'>TRADE DECISION — {stock.replace('.NS','').replace('=X','')} | {selected_mode} | {now_ist().strftime('%H:%M IST')}</div>"
     _h += f"<div style='font-size:44px;font-weight:900;color:{go_color};line-height:1;letter-spacing:-.5px;'>{go_emoji} {go_decision}</div>"
     _h += f"<div style='font-size:13px;color:#aaa;margin-top:6px;'>{go_reason}</div></div>"
     _h += f"<div style='text-align:right;'><div style='font-size:64px;font-weight:900;color:{go_color};line-height:1;'>{total_score}</div>"
@@ -2943,7 +3006,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         # Capital Advisor Card
         adv_col = "#00b880" if is_trade else "#f39c12"
         adv_h  = f"<div style='background:#0d1117;border:2px solid {adv_col};border-radius:14px;padding:20px;margin:8px 0;'>"
-        adv_h += f"<div style='font-size:13px;font-weight:700;color:#e6edf3;margin-bottom:16px;'>Capital Advisor — {stock.replace('.NS','')} {selected_mode}</div>"
+        adv_h += f"<div style='font-size:13px;font-weight:700;color:#e6edf3;margin-bottom:16px;'>Capital Advisor — {stock.replace('.NS','').replace('=X','')} {selected_mode}</div>"
         adv_h += f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;'>"
         for lbl2,val2,vc2 in [
             ("Capital", f"₹{adv_capital:,.0f}", "#e6edf3"),
@@ -3020,7 +3083,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             rpe_h += "<div style='font-size:11px;color:#888;font-weight:600;margin-bottom:8px;'>POSITION HEAT MAP</div>"
             rpe_h += "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:6px;'>"
             for sym3,pos3 in positions.items():
-                pnl3  = (price - pos3["price"]) * pos3["qty"] if stock.replace(".NS","")==sym3 else 0
+                pnl3  = (price - pos3["price"]) * pos3["qty"] if stock.replace(".NS","").replace("=X","")==sym3 else 0
                 pc3   = "#00b880" if pnl3>=0 else "#e74c3c"
                 rpe_h += f"<div style='background:{pc3}22;border:2px solid {pc3};border-radius:8px;padding:8px;text-align:center;'><div style='font-size:12px;font-weight:700;color:{pc3};'>{sym3[:8]}</div><div style='font-size:11px;color:{pc3};'>₹{pnl3:+.0f}</div></div>"
             rpe_h += "</div>"
@@ -3183,7 +3246,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         try:
             _mtf_adv = st.session_state.get("mtf_cache")
             _advice  = build_trading_advisor(
-                user, stock.replace(".NS",""), _expl, total_score, verdict,
+                user, stock.replace(".NS","").replace("=X",""), _expl, total_score, verdict,
                 price, stop_loss_m, target_m, qty_m,
                 max_loss_rs, max_gain_rs, _rr_m, win_prob, _mtf_adv)
             st.markdown(_advice)
@@ -3460,7 +3523,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
         stop_loss   = round(price - sl_dist, 2)
         target_price= round(price + tgt_dist, 2)
         rr_ratio    = round(tgt_dist / sl_dist, 1)
-        lot_size    = FO_LOTS.get(stock, 500)
+        lot_size    = CDS_META[stock]["lot_size"] if is_currency_symbol(stock) else FO_LOTS.get(stock, 500)
 
         if selected_mode == "📈 Intraday":
             qty = max(1, int(risk_amount / sl_dist))
@@ -3513,14 +3576,14 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     def log_trade(action, stk, px, q, md, pnl=None):
         st.session_state.trade_log.append({
             "time": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
-            "strategy": selected_mode, "stock": stk.replace(".NS",""),
+            "strategy": selected_mode, "stock": stk.replace(".NS","").replace("=X",""),
             "action": action, "price": round(px,2), "qty": q,
             "mode": md, "SL": stop_loss, "Target": target_price,
             "pnl": round(pnl,2) if pnl is not None else "—",
         })
 
     def order(txn):
-        sym = stock.replace(".NS","")
+        sym = stock.replace(".NS","").replace("=X","")
         if mode == "Paper":
             try:
                 live_px = float(yf.Ticker(stock).history(period="1d",interval="1m")["Close"].iloc[-1])
@@ -3560,6 +3623,23 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
                 return
         if not kite_ok(): st.error("❌ Kite Not Connected"); return
         try:
+            if is_currency_symbol(stock):
+                cds_sym, cds_lot = get_cds_tradingsymbol(kite, stock)
+                if not cds_sym:
+                    st.error("❌ Could not resolve NSE-CDS contract for this pair "
+                             "(market may be closed / instrument dump unavailable). "
+                             "Try again during market hours (9:00 AM–5:00 PM IST).")
+                    return
+                fo_qty = cds_lot
+                kite.place_order(variety="regular",exchange="CDS",tradingsymbol=cds_sym,
+                                 transaction_type=txn,quantity=fo_qty,
+                                 order_type="MARKET",product="NRML")
+                log_trade(txn,stock,price,fo_qty,"Live")
+                st.success(f"✅ Live {txn} | {cds_sym}×{fo_qty} (CDS) | NRML")
+                save_user_data(user)
+                if ALERT_ON_EXECUTION:
+                    fire_alert(f"{txn} LIVE [{selected_mode}]",stock,price,fo_qty,stop_loss,target_price,total_score,"Live")
+                return
             fo_qty = lot_size if selected_mode in ["📊 Futures","🎯 Options"] else qty
             kite.place_order(variety="regular",exchange="NSE",tradingsymbol=sym,
                              transaction_type=txn,quantity=fo_qty,
@@ -3600,7 +3680,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
             f"<div style='font-size:13px;font-weight:700;'>"
             f"Open [{pos.get('strategy','Intraday')}]{_status}</div>"
             f"<div style='margin:5px 0;font-size:13px;'>"
-            f"{pos['stock'].replace('.NS','')} | Entry Rs.{pos['price']:.2f} "
+            f"{pos['stock'].replace('.NS','').replace('=X','')} | Entry Rs.{pos['price']:.2f} "
             f"| LTP Rs.{_live_px:.2f} | Qty {pos['qty']}</div>"
             f"<div style='font-size:12px;color:#666;'>"
             f"SL Rs.{pos['stop_loss']} | TGT Rs.{pos['target']}</div>"
@@ -3628,7 +3708,7 @@ font-size:11px;font-weight:700;color:#000;display:inline-block;">🟢 BUY</div>
     if len(chart_df) < 5:
         st.warning("⚠️ Not enough data for charts. Switch to **🌊 Swing** mode.")
     elif PLOTLY_OK:
-        st.subheader(f"📉 Price Chart — {stock.replace('.NS','')} [{selected_mode}]")
+        st.subheader(f"📉 Price Chart — {stock.replace('.NS','').replace('=X','')} [{selected_mode}]")
         fig1 = go.Figure()
         fig1.add_trace(go.Candlestick(
             x=chart_df.index,
@@ -3961,7 +4041,7 @@ padding:5px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px;font-siz
 
     with at3:
         st.markdown("#### Options Data (NSE)")
-        sym_clean = stock.replace(".NS","")
+        sym_clean = stock.replace(".NS","").replace("=X","")
         if st.button(f"Load Options Data for {sym_clean}", type="primary"):
             with st.spinner("Fetching options chain..."):
                 opt_data = fetch_options_data(stock)
